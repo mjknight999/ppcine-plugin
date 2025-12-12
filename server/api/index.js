@@ -116,6 +116,36 @@ class PPCineClient {
         return result;
     }
 
+    async findTrendingTopic(typeId = 1) {
+        try {
+            const topics = await this.getSpecialLists(typeId);
+            // Look for trending/hot topics (common names in Chinese/English)
+            const trendingKeywords = ['trending', '热门', 'hot', 'hot', '推荐', 'recommend', '最新', 'latest'];
+            return topics.find(t => {
+                const name = (t.name || t.title || '').toLowerCase();
+                return trendingKeywords.some(keyword => name.includes(keyword));
+            }) || topics[0]; // Fallback to first topic if no match
+        } catch (error) {
+            console.error('Error finding trending topic:', error.message);
+            return null;
+        }
+    }
+
+    async findLatestTopic(typeId = 1) {
+        try {
+            const topics = await this.getSpecialLists(typeId);
+            // Look for latest/new topics
+            const latestKeywords = ['latest', '最新', 'new', 'newest', '最近', 'recent'];
+            return topics.find(t => {
+                const name = (t.name || t.title || '').toLowerCase();
+                return latestKeywords.some(keyword => name.includes(keyword));
+            }) || topics[1]; // Fallback to second topic if no match
+        } catch (error) {
+            console.error('Error finding latest topic:', error.message);
+            return null;
+        }
+    }
+
     async filterVideos(typeId, options = {}) {
         const { genre, area, year, page = 1 } = options;
         const params = { type_id: typeId, pn: page };
@@ -319,10 +349,56 @@ app.get('/catalog/:type/:id', async (req, res) => {
         let metas = [];
         const page = Math.floor(extra.skip / 20) + 1;
 
-        if (id === 'ppcine-trending' || id === 'ppcine-latest') {
+        if (id === 'ppcine-trending') {
             const typeId = type === 'movie' ? 1 : 2;
-            const videos = await ppcine.filterVideos(typeId, { page });
-            metas = videos.map(v => ppcine.transformToMeta(v, type));
+            // Try to use topic-based trending first (more accurate)
+            try {
+                const trendingTopic = await ppcine.findTrendingTopic(typeId);
+                if (trendingTopic && trendingTopic.id) {
+                    const topicVideos = await ppcine.getRankingVideos(trendingTopic.id, page);
+                    if (topicVideos && topicVideos.length > 0) {
+                        metas = topicVideos.map(v => ppcine.transformToMeta(v, type));
+                    } else {
+                        // Fallback to filter if topic returns empty
+                        const videos = await ppcine.filterVideos(typeId, { page });
+                        metas = videos.map(v => ppcine.transformToMeta(v, type));
+                    }
+                } else {
+                    // Fallback to filter if no topic found
+                    const videos = await ppcine.filterVideos(typeId, { page });
+                    metas = videos.map(v => ppcine.transformToMeta(v, type));
+                }
+            } catch (error) {
+                console.error('Trending topic error, using filter fallback:', error.message);
+                // Fallback to filter method
+                const videos = await ppcine.filterVideos(typeId, { page });
+                metas = videos.map(v => ppcine.transformToMeta(v, type));
+            }
+        } else if (id === 'ppcine-latest') {
+            const typeId = type === 'movie' ? 1 : 2;
+            // Try to use topic-based latest first (more accurate)
+            try {
+                const latestTopic = await ppcine.findLatestTopic(typeId);
+                if (latestTopic && latestTopic.id) {
+                    const topicVideos = await ppcine.getRankingVideos(latestTopic.id, page);
+                    if (topicVideos && topicVideos.length > 0) {
+                        metas = topicVideos.map(v => ppcine.transformToMeta(v, type));
+                    } else {
+                        // Fallback to filter if topic returns empty
+                        const videos = await ppcine.filterVideos(typeId, { page });
+                        metas = videos.map(v => ppcine.transformToMeta(v, type));
+                    }
+                } else {
+                    // Fallback to filter if no topic found
+                    const videos = await ppcine.filterVideos(typeId, { page });
+                    metas = videos.map(v => ppcine.transformToMeta(v, type));
+                }
+            } catch (error) {
+                console.error('Latest topic error, using filter fallback:', error.message);
+                // Fallback to filter method
+                const videos = await ppcine.filterVideos(typeId, { page });
+                metas = videos.map(v => ppcine.transformToMeta(v, type));
+            }
         } else if (id === 'ppcine-series') {
             const videos = await ppcine.filterVideos(2, { page });
             metas = videos.map(v => ppcine.transformToMeta(v, 'series'));
