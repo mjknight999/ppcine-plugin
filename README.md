@@ -10,14 +10,22 @@
   <img src="https://img.shields.io/badge/version-1.0.0-blue?style=flat-square" alt="Version">
   <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen?style=flat-square&logo=node.js" alt="Node">
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/deploy-Vercel-black?style=flat-square&logo=vercel" alt="Vercel">
+  <img src="https://img.shields.io/badge/deploy-Railway-purple?style=flat-square&logo=railway" alt="Railway">
+  <img src="https://img.shields.io/badge/deploy-Render-green?style=flat-square&logo=render" alt="Render">
+  <img src="https://img.shields.io/badge/deploy-Fly.io-purple?style=flat-square&logo=fly.io" alt="Fly.io">
+  <img src="https://img.shields.io/badge/deploy-Netlify-teal?style=flat-square&logo=netlify" alt="Netlify">
+  <img src="https://img.shields.io/badge/deploy-Docker-blue?style=flat-square&logo=docker" alt="Docker">
 </p>
 
 <p align="center">
   <a href="#-features">Features</a> •
   <a href="#-quick-start">Quick Start</a> •
+  <a href="#-deploy-anywhere">Deploy Anywhere</a> •
   <a href="#-api-reference">API Reference</a> •
-  <a href="#-platform-support">Platforms</a> •
   <a href="#-documentation">Docs</a>
 </p>
 
@@ -25,10 +33,10 @@
 
 ## 🎬 Overview
 
-**PPCine Plugin** is a powerful, universal streaming API that provides seamless access to movies, TV series, and anime content. Built with simplicity in mind, it can be deployed in minutes and works with any platform or media player.
+**PPCine Plugin** is a powerful, universal streaming API that provides seamless access to movies, TV series, and anime content. Built with simplicity in mind, it can be deployed in minutes to **ANY platform** and works with any media player.
 
 ```
-One API → All Platforms → Unlimited Streaming
+One Codebase → Deploy Anywhere → Stream Everywhere
 ```
 
 ## ✨ Features
@@ -41,7 +49,7 @@ One API → All Platforms → Unlimited Streaming
 | 🔗 **Stream URLs** | Direct HLS/MP4 streaming links |
 | 📱 **Universal** | Works on iOS, tvOS, Android, Web, and more |
 | ⚡ **Fast** | Built-in caching for optimal performance |
-| 🆓 **Free Hosting** | Deploy to Vercel at no cost |
+| 🌐 **Multi-Platform** | Deploy to 6+ hosting platforms |
 
 ## 📦 What You Get
 
@@ -56,38 +64,68 @@ One API → All Platforms → Unlimited Streaming
 
 ## 🚀 Quick Start
 
-### One-Click Deploy
+### Choose Your Platform
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/YOUR_USERNAME/ppcine-plugin)
+| Platform | Free Tier | Always On | Deploy |
+|----------|-----------|-----------|--------|
+| **Vercel** | ✅ Unlimited | ❌ | [![Deploy](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/YOUR_USERNAME/ppcine-plugin) |
+| **Railway** | ✅ $5/month | ✅ | [Deploy →](https://railway.app) |
+| **Render** | ✅ 750 hrs | ⚠️ | [Deploy →](https://render.com) |
+| **Fly.io** | ✅ 3 VMs | ✅ | [Deploy →](https://fly.io) |
+| **Netlify** | ✅ 125k req | ❌ | [Deploy →](https://netlify.com) |
+| **Koyeb** | ✅ 2 services | ✅ | [Deploy →](https://koyeb.com) |
 
-### Manual Deployment
-
-1. **Clone or download** the `server/` folder
-2. **Push to GitHub** (see [Beginner Guide](./BEGINNER_GUIDE.md))
-3. **Import to Vercel** → Click Deploy
-4. **Get your URL**: `https://your-app.vercel.app`
-
-> 📘 **New to deployment?** Follow our step-by-step [Beginner Guide](./BEGINNER_GUIDE.md)
+> 📘 **New to deployment?** Follow our [Complete Deployment Guide](./DEPLOYMENT_GUIDE.md)
 
 ## 📁 Project Structure
 
 ```
 PPCinePlugin/
 ├── 📄 README.md              # This file
-├── 📘 BEGINNER_GUIDE.md      # Step-by-step deployment guide
+├── 📘 DEPLOYMENT_GUIDE.md    # Multi-platform deployment guide
+├── 📘 BEGINNER_GUIDE.md      # Vercel-only beginner guide
 ├── 📚 API_REFERENCE.md       # Complete API documentation
 └── 📂 server/
     ├── 📂 api/
     │   └── index.js          # Main server (all-in-one)
+    ├── 📂 netlify/
+    │   └── 📂 functions/
+    │       └── server.js     # Netlify wrapper
     ├── package.json          # Dependencies
-    └── vercel.json           # Vercel configuration
+    ├── vercel.json           # Vercel config
+    ├── railway.json          # Railway config
+    ├── render.yaml           # Render config
+    ├── fly.toml              # Fly.io config
+    ├── netlify.toml          # Netlify config
+    ├── Dockerfile            # Docker (universal)
+    └── Procfile              # Heroku-compatible
 ```
+
+## 🌐 Deploy Anywhere
+
+### Platform Comparison
+
+| Feature | Vercel | Railway | Render | Fly.io |
+|---------|--------|---------|--------|--------|
+| **Free Tier** | ✅ Great | ✅ $5/mo | ✅ 750hrs | ✅ 3 VMs |
+| **Cold Starts** | Yes | No | No | No |
+| **Always Running** | No | Yes | Sleeps | Yes |
+| **Global Edge** | Yes | No | No | Yes |
+| **Docker Support** | No | Yes | Yes | Yes |
+| **Difficulty** | Easy | Easy | Easy | Medium |
+
+### Recommendation
+
+- **Beginners:** Start with **Vercel** (easiest)
+- **Best Overall:** Use **Railway** (always running + free)
+- **Global Speed:** Use **Fly.io** (multiple regions)
+- **Redundancy:** Deploy to 2-3 platforms!
 
 ## 📡 API Reference
 
 ### Base URL
 ```
-https://your-deployed-url.vercel.app
+https://your-deployed-url.com
 ```
 
 ### Core Endpoints
@@ -115,17 +153,17 @@ https://your-deployed-url.vercel.app
 
 **Get Trending Movies**
 ```bash
-curl https://your-url.vercel.app/catalog/movie/ppcine-trending
+curl https://your-url/catalog/movie/ppcine-trending
 ```
 
 **Search Content**
 ```bash
-curl https://your-url.vercel.app/search?q=batman
+curl https://your-url/search?q=batman
 ```
 
 **Get Streaming URL**
 ```bash
-curl https://your-url.vercel.app/stream/movie/ppcine:12345
+curl https://your-url/stream/movie/ppcine:12345
 ```
 
 > 📚 **Full API documentation**: [API_REFERENCE.md](./API_REFERENCE.md)
@@ -158,7 +196,7 @@ curl https://your-url.vercel.app/stream/movie/ppcine:12345
 
 ```swift
 // Fetch streaming URL
-let url = URL(string: "https://your-url.vercel.app/stream/movie/ppcine:12345")!
+let url = URL(string: "https://your-url/stream/movie/ppcine:12345")!
 let (data, _) = try await URLSession.shared.data(from: url)
 let response = try JSONDecoder().decode(StreamResponse.self, from: data)
 
@@ -174,7 +212,7 @@ if let streamUrl = response.streams.first?.url {
 
 ```javascript
 // Get movie streams
-const response = await fetch('https://your-url.vercel.app/stream/movie/ppcine:12345');
+const response = await fetch('https://your-url/stream/movie/ppcine:12345');
 const { streams } = await response.json();
 
 // Play with HLS.js
@@ -189,7 +227,7 @@ if (Hls.isSupported() && streams.length > 0) {
 
 ```kotlin
 // Get streaming URL
-val response = client.get("https://your-url.vercel.app/stream/movie/ppcine:12345")
+val response = client.get("https://your-url/stream/movie/ppcine:12345")
 val streams = response.body<StreamResponse>().streams
 
 // Play with ExoPlayer
@@ -253,7 +291,8 @@ npm start
 
 | Document | Description |
 |----------|-------------|
-| [BEGINNER_GUIDE.md](./BEGINNER_GUIDE.md) | Complete step-by-step deployment guide |
+| [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) | **NEW!** Multi-platform deployment guide |
+| [BEGINNER_GUIDE.md](./BEGINNER_GUIDE.md) | Vercel-only step-by-step guide |
 | [API_REFERENCE.md](./API_REFERENCE.md) | Full API documentation with examples |
 
 ## ❓ Troubleshooting
@@ -261,7 +300,7 @@ npm start
 | Issue | Solution |
 |-------|----------|
 | **Page not found** | Ensure all files are uploaded correctly |
-| **500 error** | Wait 30s for cold start, check Vercel logs |
+| **500 error** | Wait 30s for cold start, check logs |
 | **No streams** | Content may not have available sources |
 | **CORS errors** | Plugin already has CORS enabled |
 
