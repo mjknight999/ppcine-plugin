@@ -1091,31 +1091,58 @@ app.get('/debug/video/:id', async (req, res) => {
         const vodId = parseInt(req.params.id);
         if (!ppcine.isInitialized()) await ppcine.initialize();
 
-        // Try info_new first
-        const infoNewResponse = await ppcine.request('api/vod/info_new', { vod_id: vodId });
-        const infoNewResult = infoNewResponse?.result || infoNewResponse?.data || infoNewResponse;
+        // Get raw responses directly
+        const authHeaders = ppcine.buildAuthHeaders();
+        const formData = new URLSearchParams();
+        formData.append('vod_id', vodId);
+        Object.entries(authHeaders).forEach(([key, value]) => formData.append(key, value));
 
-        // Try info endpoint
-        const infoResponse = await ppcine.request('api/vod/info', { vod_id: vodId });
-        const infoResult = infoResponse?.result || infoResponse?.data || infoResponse;
+        let rawInfoNewResponse = null;
+        let rawInfoResponse = null;
+
+        try {
+            const resp1 = await ppcine.client.post('api/vod/info_new', formData.toString(), {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'okhttp/4.9.0'
+                },
+                responseType: 'text'
+            });
+            rawInfoNewResponse = resp1.data;
+        } catch (e) {
+            rawInfoNewResponse = `Error: ${e.message}`;
+        }
+
+        try {
+            const resp2 = await ppcine.client.post('api/vod/info', formData.toString(), {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'okhttp/4.9.0'
+                },
+                responseType: 'text'
+            });
+            rawInfoResponse = resp2.data;
+        } catch (e) {
+            rawInfoResponse = `Error: ${e.message}`;
+        }
 
         res.json({
             vodId,
             info_new: {
-                hasVodCollection: !!(infoNewResult?.vod_collection),
-                vodCollectionLength: infoNewResult?.vod_collection?.length || 0,
-                vodCollectionSample: infoNewResult?.vod_collection?.[0] || null,
-                allKeys: infoNewResult ? Object.keys(infoNewResult) : []
+                type: typeof rawInfoNewResponse,
+                length: rawInfoNewResponse ? rawInfoNewResponse.length : 0,
+                startsWithJson: rawInfoNewResponse ? rawInfoNewResponse.startsWith('{') : false,
+                first200chars: rawInfoNewResponse ? rawInfoNewResponse.substring(0, 200) : null
             },
             info: {
-                hasVodCollection: !!(infoResult?.vod_collection),
-                vodCollectionLength: infoResult?.vod_collection?.length || 0,
-                vodCollectionSample: infoResult?.vod_collection?.[0] || null,
-                allKeys: infoResult ? Object.keys(infoResult) : []
+                type: typeof rawInfoResponse,
+                length: rawInfoResponse ? rawInfoResponse.length : 0,
+                startsWithJson: rawInfoResponse ? rawInfoResponse.startsWith('{') : false,
+                first200chars: rawInfoResponse ? rawInfoResponse.substring(0, 200) : null
             }
         });
     } catch (error) {
-        res.json({ error: error.message });
+        res.json({ error: error.message, stack: error.stack });
     }
 });
 
