@@ -34,26 +34,35 @@ class PPCineClient {
 
     async initialize() {
         try {
+            console.log('PPCineClient: Initializing with device_id:', this.deviceId);
+            console.log('PPCineClient: Base URL:', this.baseURL);
+            
             const response = await this.request('api/public/init', {
                 device_id: this.deviceId,
                 is_install: '1'
             });
 
+            console.log('PPCineClient: Init response received:', JSON.stringify(response).substring(0, 200));
+
             if (response.result) {
                 if (response.result.user_info?.token) {
                     this.token = response.result.user_info.token;
+                    console.log('PPCineClient: Token received');
                 }
                 if (response.result.sys_conf?.api_url2) {
                     this.baseURL = response.result.sys_conf.api_url2;
                     if (!this.baseURL.endsWith('/')) this.baseURL += '/';
                     this.client.defaults.baseURL = this.baseURL;
+                    console.log('PPCineClient: Updated base URL to:', this.baseURL);
                 }
                 this.initialized = true;
+                console.log('PPCineClient: Initialization successful');
                 return response.result;
             }
             throw new Error('Invalid initialization response');
         } catch (error) {
-            console.error('Initialize error:', error.message);
+            console.error('PPCineClient: Initialize error:', error.message);
+            console.error('PPCineClient: Error details:', error.response?.data || error.stack);
             throw error;
         }
     }
@@ -67,8 +76,27 @@ class PPCineClient {
             formData.append(key, value);
         }
 
-        const response = await this.client.post(endpoint, formData.toString());
-        return response.data;
+        try {
+            const url = `${this.baseURL}${endpoint}`;
+            console.log(`PPCineClient: Requesting ${url} with params:`, Object.keys(allParams).join(', '));
+            
+            const response = await this.client.post(endpoint, formData.toString());
+            
+            if (response.data && response.data.code !== undefined && response.data.code !== 1 && response.data.code !== 200) {
+                console.warn(`PPCineClient: API returned code ${response.data.code}:`, response.data.msg || 'Unknown error');
+            }
+            
+            return response.data;
+        } catch (error) {
+            console.error(`PPCineClient: Request failed for ${endpoint}:`, error.message);
+            if (error.response) {
+                console.error(`PPCineClient: Response status: ${error.response.status}`);
+                console.error(`PPCineClient: Response data:`, JSON.stringify(error.response.data).substring(0, 200));
+            } else if (error.request) {
+                console.error('PPCineClient: No response received - network error');
+            }
+            throw error;
+        }
     }
 
     getCached(key) {
@@ -103,17 +131,37 @@ class PPCineClient {
     }
 
     async getRankingVideos(topicId, page = 1) {
-        const response = await this.request('api/topic/vod_list', { topic_id: topicId, pn: page });
-        return response.result?.list || [];
+        try {
+            console.log(`PPCineClient: getRankingVideos - topicId: ${topicId}, page: ${page}`);
+            const response = await this.request('api/topic/vod_list', { topic_id: topicId, pn: page });
+            const result = response.result?.list || [];
+            console.log(`PPCineClient: getRankingVideos returned ${result.length} items`);
+            return result;
+        } catch (error) {
+            console.error('PPCineClient: getRankingVideos error:', error.message);
+            console.error('PPCineClient: Error response:', error.response?.data || 'No response data');
+            return [];
+        }
     }
 
     async getSpecialLists(typeId = 1) {
         const cached = this.getCached(`special_${typeId}`);
-        if (cached) return cached;
-        const response = await this.request('api/topic/list', { type_id: typeId });
-        const result = response.result || [];
-        this.setCache(`special_${typeId}`, result);
-        return result;
+        if (cached) {
+            console.log(`PPCineClient: getSpecialLists (cached) - typeId: ${typeId}, topics: ${cached.length}`);
+            return cached;
+        }
+        try {
+            console.log(`PPCineClient: getSpecialLists - typeId: ${typeId}`);
+            const response = await this.request('api/topic/list', { type_id: typeId });
+            const result = response.result || [];
+            console.log(`PPCineClient: getSpecialLists returned ${result.length} topics`);
+            this.setCache(`special_${typeId}`, result);
+            return result;
+        } catch (error) {
+            console.error('PPCineClient: getSpecialLists error:', error.message);
+            console.error('PPCineClient: Error response:', error.response?.data || 'No response data');
+            return [];
+        }
     }
 
     async findTrendingTopic(typeId = 1) {
@@ -152,8 +200,18 @@ class PPCineClient {
         if (genre) params.class = genre;
         if (area) params.area = area;
         if (year) params.year = year;
-        const response = await this.request('api/search/screen', params);
-        return response.result || [];
+        
+        try {
+            console.log(`PPCineClient: filterVideos - typeId: ${typeId}, page: ${page}, params:`, params);
+            const response = await this.request('api/search/screen', params);
+            const result = response.result || [];
+            console.log(`PPCineClient: filterVideos returned ${result.length} items`);
+            return result;
+        } catch (error) {
+            console.error('PPCineClient: filterVideos error:', error.message);
+            console.error('PPCineClient: Error response:', error.response?.data || 'No response data');
+            return [];
+        }
     }
 
     async search(keyword, page = 1) {
@@ -348,14 +406,19 @@ app.get('/catalog/:type/:id', async (req, res) => {
         // Initialize if needed (with timeout)
         if (!ppcine.isInitialized()) {
             try {
+                console.log('Catalog endpoint: Initializing PPCine client...');
                 await Promise.race([
                     ppcine.initialize(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Initialization timeout')), 10000))
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Initialization timeout')), 15000))
                 ]);
+                console.log('Catalog endpoint: Initialization successful');
             } catch (initError) {
-                console.error('Initialization error (continuing anyway):', initError.message);
+                console.error('Catalog endpoint: Initialization error:', initError.message);
+                console.error('Catalog endpoint: Error stack:', initError.stack);
                 // Continue even if initialization fails - will retry on next request
             }
+        } else {
+            console.log('Catalog endpoint: PPCine client already initialized');
         }
 
         let metas = [];
