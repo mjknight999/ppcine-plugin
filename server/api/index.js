@@ -6,6 +6,8 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const crypto = require('crypto');
+
 
 const app = express();
 
@@ -13,6 +15,50 @@ const app = express();
 // PPCINE CLIENT
 // ============================================
 class PPCineClient {
+    // ==========================================
+    // AUTHENTICATION CONSTANTS (extracted from Android app)
+    // ==========================================
+    static SECRET_KEY = '47Q8tBqO4YqrMHf4'; // Decrypted from Android app's encrypted key
+    static APP_ID = 'movieph';
+    static VERSION = '40000';
+    static SYS_PLATFORM = '2'; // 2 = Android
+    static CHANNEL_CODE = 'movieph_1002'; // From AndroidManifest UMENG_CHANNEL
+
+    // AES decryption constants (from ak/a.java - AESOperator)
+    static AES_KEY = '0123456789123456';
+    static AES_IV = '2015030120123456';
+
+    // Generate MD5 hash
+    static md5(str) {
+        return crypto.createHash('md5').update(str).digest('hex');
+    }
+
+    // Generate signature: MD5(SECRET_KEY + device_id + timestamp).toUpperCase()
+    static generateSign(deviceId, timestamp) {
+        const toHash = PPCineClient.SECRET_KEY + deviceId + timestamp;
+        return PPCineClient.md5(toHash).toUpperCase();
+    }
+
+    // Decrypt AES-encrypted API response (from ak/a.java)
+    static decryptResponse(encryptedBase64) {
+        try {
+            // Base64 decode
+            const encrypted = Buffer.from(encryptedBase64, 'base64');
+
+            // AES decrypt using CBC mode with PKCS5 padding
+            const decipher = crypto.createDecipheriv('aes-128-cbc',
+                Buffer.from(PPCineClient.AES_KEY),
+                Buffer.from(PPCineClient.AES_IV));
+            let decrypted = decipher.update(encrypted);
+            decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+            return decrypted.toString('utf8');
+        } catch (e) {
+            console.error('PPCineClient: Decryption error:', e.message);
+            return null;
+        }
+    }
+
     // Generate a more Android-like device ID (32 char hex string)
     static generateDeviceId() {
         const chars = '0123456789abcdef';
@@ -22,7 +68,8 @@ class PPCineClient {
         }
         return deviceId;
     }
-    
+
+
     constructor() {
         // Try multiple base URLs (Android app uses kuht.52s7g.com, but init may redirect)
         this.baseURLs = [
@@ -35,7 +82,7 @@ class PPCineClient {
         this.initialized = false;
         this.initializationAttempted = false;
         this.cache = new Map();
-        
+
         this.client = axios.create({
             baseURL: this.baseURL,
             timeout: 30000,
@@ -51,42 +98,45 @@ class PPCineClient {
     }
 
     isInitialized() { return this.initialized; }
-    
+
     generateDeviceId() {
         return PPCineClient.generateDeviceId();
     }
-    
-    // Helper to normalize API responses (handles arrays, objects with numeric keys, etc.)
-    normalizeResponse(response) {
-        if (!response) return [];
-        
-        // Already an array
-        if (Array.isArray(response)) {
-            return response;
-        }
-        
-        // Object with numeric keys (array-like object)
-        if (typeof response === 'object') {
-            const keys = Object.keys(response);
-            // Check if all keys are numeric (array-like object)
-            if (keys.length > 0 && keys.every(k => !isNaN(parseInt(k)))) {
-                return Object.values(response);
-            }
-            
-            // Check for common result patterns
-            if (response.result) {
-                return this.normalizeResponse(response.result);
-            }
-            if (response.data) {
-                return this.normalizeResponse(response.data);
-            }
-            if (response.list) {
-                return this.normalizeResponse(response.list);
-            }
-        }
-        
-        return [];
+
+    // Get authentication HEADERS for API requests (Android app sends these as headers, not body params!)
+    getAuthHeaders() {
+        const curTime = Date.now().toString();
+        const sign = PPCineClient.generateSign(this.deviceId, curTime);
+
+        // Generate a fake GAID (Google Advertising ID)
+        const gaid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0;
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+
+        return {
+            'app_id': PPCineClient.APP_ID,
+            'package_name': 'com.movieph.bj.playvibes',
+            'version': PPCineClient.VERSION,
+            'sys_platform': PPCineClient.SYS_PLATFORM,
+            'mob_mfr': 'samsung',
+            'mobmodel': 'SM-G998U',
+            'sysrelease': '13',
+            'device_id': this.deviceId,
+            'gaid': gaid,
+            'channel_code': PPCineClient.CHANNEL_CODE,
+            'androidid': this.deviceId.substring(0, 16), // Use first 16 chars of device_id
+            'cur_time': curTime,
+            'token': this.token || '',
+            'sign': sign,
+            'is_vvv': '0',
+            'is_language': 'en',
+            'is_display': '',
+            'app_language': 'en',
+            'en_al': '0'
+        };
     }
+
 
     async initialize() {
         if (this.initializationAttempted && !this.initialized) {
@@ -94,19 +144,19 @@ class PPCineClient {
             // Allow retry but with different device_id format
             this.deviceId = this.generateDeviceId();
         }
-        
+
         this.initializationAttempted = true;
-        
+
         // Try each base URL
         for (const baseUrl of this.baseURLs) {
             try {
                 console.log('PPCineClient: Initializing with device_id:', this.deviceId);
                 console.log('PPCineClient: Trying base URL:', baseUrl);
-                
+
                 // Set base URL for this attempt
                 this.baseURL = baseUrl;
                 this.client.defaults.baseURL = baseUrl;
-                
+
                 const response = await this.request('api/public/init', {
                     device_id: this.deviceId,
                     is_install: '1'
@@ -136,11 +186,12 @@ class PPCineClient {
                         console.log('PPCineClient: Initialization successful (result format)');
                         return response.result;
                     }
-                    
-                    // Format 2: { code: 1, msg: "...", data: {...} }
+
+                    // Format 2: { code: 10000/1/200, msg/message: "...", data/result: {...} }
                     if (response.code !== undefined) {
-                        console.log('PPCineClient: Init returned code:', response.code, 'msg:', response.msg);
-                        if (response.code === 1 || response.code === 200) {
+                        console.log('PPCineClient: Init returned code:', response.code, 'msg:', response.message || response.msg);
+                        if (response.code === 10000 || response.code === 1 || response.code === 200) {
+
                             if (response.data) {
                                 if (response.data.user_info?.token) {
                                     this.token = response.data.user_info.token;
@@ -156,7 +207,7 @@ class PPCineClient {
                             return response;
                         }
                     }
-                    
+
                     // Format 3: Direct data
                     if (response.user_info || response.sys_conf) {
                         if (response.user_info?.token) {
@@ -172,7 +223,7 @@ class PPCineClient {
                         return response;
                     }
                 }
-                
+
                 // If we get here, response format not recognized
                 console.warn('PPCineClient: Unrecognized response format for', baseUrl);
                 console.warn('PPCineClient: Response keys:', Object.keys(response || {}));
@@ -188,65 +239,91 @@ class PPCineClient {
                 continue;
             }
         }
-        
+
         // If all base URLs failed, mark as attempted but not initialized
         console.error('PPCineClient: All initialization attempts failed');
         console.error('PPCineClient: Will continue without initialization - some endpoints may work');
         this.initialized = false;
         return null;
     }
-    
-    generateDeviceId() {
-        // Generate a more Android-like device ID
-        const chars = '0123456789abcdef';
-        let deviceId = '';
-        for (let i = 0; i < 32; i++) {
-            deviceId += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return deviceId;
-    }
+
 
     async request(endpoint, params = {}, skipInit = false) {
-        const allParams = { device_id: this.deviceId, ...params };
-        if (this.token) allParams.token = this.token;
+        // Get authentication HEADERS (Android app sends these as headers, not body params!)
+        const authHeaders = this.getAuthHeaders();
+
+        // Body params - include device_id as the Android app does for some endpoints
+        const bodyParams = { device_id: this.deviceId, ...params };
+        if (this.token) bodyParams.token = this.token;
 
         const formData = new URLSearchParams();
-        for (const [key, value] of Object.entries(allParams)) {
+        for (const [key, value] of Object.entries(bodyParams)) {
             formData.append(key, value);
         }
 
         try {
             const url = `${this.baseURL}${endpoint}`;
-            console.log(`PPCineClient: Requesting ${url} with params:`, Object.keys(allParams).join(', '));
-            
-            const response = await this.client.post(endpoint, formData.toString());
-            
-            // Log full response for debugging (especially for search/screen which is critical)
-            if (endpoint === 'api/public/init' || endpoint === 'api/search/screen' || response.status >= 400) {
-                const responseStr = JSON.stringify(response.data);
-                console.log(`PPCineClient: Full response for ${endpoint} (${responseStr.length} chars):`, responseStr.substring(0, 1000));
-                if (response.data && typeof response.data === 'object') {
-                    console.log(`PPCineClient: Response type:`, Array.isArray(response.data) ? 'array' : 'object');
-                    if (!Array.isArray(response.data)) {
-                        console.log(`PPCineClient: Response keys:`, Object.keys(response.data));
-                    }
-                }
-            }
-            
-            // Check for error codes in response
-            if (response.data) {
-                if (response.data.code !== undefined) {
-                    if (response.data.code === 1 || response.data.code === 200) {
-                        // Success code
-                        return response.data;
+            console.log(`PPCineClient: Requesting ${url}`);
+            console.log(`PPCineClient: Headers:`, Object.keys(authHeaders).join(', '));
+            console.log(`PPCineClient: Body params:`, Object.keys(bodyParams).join(', '));
+
+            const response = await this.client.post(endpoint, formData.toString(), {
+                headers: {
+                    ...authHeaders,
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'User-Agent': 'okhttp/4.9.0'
+                },
+                responseType: 'text' // Get raw text to handle both encrypted and plain responses
+            });
+
+            // Response is AES encrypted and base64 encoded
+            let responseData = response.data;
+
+            // If response is a string (encrypted), try to decrypt
+            if (typeof responseData === 'string' && responseData.length > 0) {
+                // Check if it's encrypted (doesn't start with '{')
+                if (!responseData.startsWith('{')) {
+                    const decrypted = PPCineClient.decryptResponse(responseData);
+                    if (decrypted) {
+                        try {
+                            responseData = JSON.parse(decrypted);
+                            console.log(`PPCineClient: Decrypted response for ${endpoint}`);
+                        } catch (e) {
+                            console.error('PPCineClient: Failed to parse decrypted JSON:', e.message);
+                            responseData = decrypted;
+                        }
                     } else {
-                        console.warn(`PPCineClient: API returned code ${response.data.code}:`, response.data.msg || 'Unknown error');
-                        // Still return data, some endpoints might work with non-1 codes
+                        console.error('PPCineClient: Failed to decrypt response');
+                    }
+                } else {
+                    // Already JSON string, parse it
+                    try {
+                        responseData = JSON.parse(responseData);
+                    } catch (e) {
+                        console.error('PPCineClient: Failed to parse JSON response:', e.message);
                     }
                 }
             }
-            
-            return response.data;
+
+            // Log response for debugging
+            if (endpoint === 'api/public/init' || response.status >= 400) {
+                console.log(`PPCineClient: Response for ${endpoint}:`, JSON.stringify(responseData).substring(0, 500));
+            }
+
+            // Check for error codes in response  
+            if (responseData && typeof responseData === 'object') {
+                // API uses code 10000 for success
+                if (responseData.code !== undefined) {
+                    if (responseData.code === 10000 || responseData.code === 1 || responseData.code === 200) {
+                        return responseData;
+                    } else {
+                        console.warn(`PPCineClient: API returned code ${responseData.code}:`, responseData.message || responseData.msg || 'Unknown error');
+                    }
+                }
+            }
+
+            return responseData;
+
         } catch (error) {
             console.error(`PPCineClient: Request failed for ${endpoint}:`, error.message);
             if (error.response) {
@@ -370,36 +447,31 @@ class PPCineClient {
         if (genre) params.class = genre;
         if (area) params.area = area;
         if (year) params.year = year;
-        
+
         try {
             console.log(`PPCineClient: filterVideos - typeId: ${typeId}, page: ${page}, params:`, params);
             // Try without initialization - some endpoints might work
             const response = await this.request('api/search/screen', params, true);
-            
-            console.log(`PPCineClient: filterVideos raw response type:`, typeof response);
-            console.log(`PPCineClient: filterVideos is array:`, Array.isArray(response));
-            if (response && !Array.isArray(response) && typeof response === 'object') {
-                const keys = Object.keys(response);
-                console.log(`PPCineClient: filterVideos response keys (${keys.length}):`, keys.slice(0, 20).join(', '));
-                // Check if it's an array-like object
-                if (keys.length > 0 && keys.every(k => !isNaN(parseInt(k)))) {
-                    console.log(`PPCineClient: filterVideos - Detected array-like object with ${keys.length} numeric keys`);
+
+            // Handle different response formats
+            let result = [];
+            if (response) {
+                if (response.result) {
+                    result = Array.isArray(response.result) ? response.result : [];
+                } else if (Array.isArray(response)) {
+                    result = response;
+                } else if (response.code === 1 && response.data) {
+                    result = Array.isArray(response.data) ? response.data : [];
                 }
             }
-            
-            // Use helper to normalize response
-            const result = this.normalizeResponse(response);
-            
+
             console.log(`PPCineClient: filterVideos returned ${result.length} items`);
-            if (result.length > 0) {
-                console.log(`PPCineClient: filterVideos first item sample:`, JSON.stringify(result[0]).substring(0, 200));
-            }
             return result;
         } catch (error) {
             console.error('PPCineClient: filterVideos error:', error.message);
             if (error.response) {
                 console.error('PPCineClient: Error status:', error.response.status);
-                console.error('PPCineClient: Error data:', JSON.stringify(error.response.data).substring(0, 500));
+                console.error('PPCineClient: Error data:', JSON.stringify(error.response.data).substring(0, 300));
             }
             return [];
         }
@@ -608,7 +680,7 @@ app.get('/catalog/:type/:id', async (req, res) => {
                 console.warn('Catalog endpoint: Initialization attempt error:', initError.message);
             }
         }
-        
+
         // Continue with catalog fetch regardless of initialization status
         console.log('Catalog endpoint: Proceeding with catalog fetch (initialized:', ppcine.isInitialized(), ')');
 
@@ -691,12 +763,7 @@ app.get('/catalog/:type/:id', async (req, res) => {
 
         // Log result for debugging
         console.log(`Catalog ${id}: Returning ${metas.length} items`);
-        if (metas.length === 0) {
-            console.warn(`Catalog ${id}: No items found - this might indicate an API issue`);
-        } else {
-            console.log(`Catalog ${id}: First item:`, JSON.stringify(metas[0]).substring(0, 150));
-        }
-        
+
         res.json({ metas });
     } catch (error) {
         console.error('Catalog error:', error.message);
@@ -903,9 +970,9 @@ app.get('/health', async (req, res) => {
             console.error('Health check: Init attempt failed:', error.message);
         }
     }
-    res.json({ 
-        status: 'ok', 
-        version: '1.0.0', 
+    res.json({
+        status: 'ok',
+        version: '1.0.0',
         initialized: ppcine.isInitialized(),
         baseURL: ppcine.baseURL,
         deviceId: ppcine.deviceId.substring(0, 20) + '...'
@@ -921,7 +988,7 @@ app.use((err, req, res, next) => {
 });
 
 app.use((req, res) => {
-    res.status(404).json({ 
+    res.status(404).json({
         error: 'Endpoint not found',
         endpoints: ['/manifest.json', '/catalog/:type/:id', '/meta/:type/:id', '/stream/:type/:id', '/search?q=query']
     });
@@ -938,7 +1005,7 @@ module.exports = app;
 if (require.main === module) {
     const PORT = process.env.PORT || 3000;
     const HOST = process.env.HOST || '0.0.0.0';
-    
+
     ppcine.initialize().then(() => {
         app.listen(PORT, HOST, () => {
             console.log(`✅ PPCine Plugin Server running!`);
