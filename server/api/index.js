@@ -55,6 +55,38 @@ class PPCineClient {
     generateDeviceId() {
         return PPCineClient.generateDeviceId();
     }
+    
+    // Helper to normalize API responses (handles arrays, objects with numeric keys, etc.)
+    normalizeResponse(response) {
+        if (!response) return [];
+        
+        // Already an array
+        if (Array.isArray(response)) {
+            return response;
+        }
+        
+        // Object with numeric keys (array-like object)
+        if (typeof response === 'object') {
+            const keys = Object.keys(response);
+            // Check if all keys are numeric (array-like object)
+            if (keys.length > 0 && keys.every(k => !isNaN(parseInt(k)))) {
+                return Object.values(response);
+            }
+            
+            // Check for common result patterns
+            if (response.result) {
+                return this.normalizeResponse(response.result);
+            }
+            if (response.data) {
+                return this.normalizeResponse(response.data);
+            }
+            if (response.list) {
+                return this.normalizeResponse(response.list);
+            }
+        }
+        
+        return [];
+    }
 
     async initialize() {
         if (this.initializationAttempted && !this.initialized) {
@@ -189,9 +221,16 @@ class PPCineClient {
             
             const response = await this.client.post(endpoint, formData.toString());
             
-            // Log full response for debugging
-            if (endpoint === 'api/public/init' || response.status >= 400) {
-                console.log(`PPCineClient: Full response for ${endpoint}:`, JSON.stringify(response.data).substring(0, 500));
+            // Log full response for debugging (especially for search/screen which is critical)
+            if (endpoint === 'api/public/init' || endpoint === 'api/search/screen' || response.status >= 400) {
+                const responseStr = JSON.stringify(response.data);
+                console.log(`PPCineClient: Full response for ${endpoint} (${responseStr.length} chars):`, responseStr.substring(0, 1000));
+                if (response.data && typeof response.data === 'object') {
+                    console.log(`PPCineClient: Response type:`, Array.isArray(response.data) ? 'array' : 'object');
+                    if (!Array.isArray(response.data)) {
+                        console.log(`PPCineClient: Response keys:`, Object.keys(response.data));
+                    }
+                }
             }
             
             // Check for error codes in response
@@ -337,25 +376,30 @@ class PPCineClient {
             // Try without initialization - some endpoints might work
             const response = await this.request('api/search/screen', params, true);
             
-            // Handle different response formats
-            let result = [];
-            if (response) {
-                if (response.result) {
-                    result = Array.isArray(response.result) ? response.result : [];
-                } else if (Array.isArray(response)) {
-                    result = response;
-                } else if (response.code === 1 && response.data) {
-                    result = Array.isArray(response.data) ? response.data : [];
+            console.log(`PPCineClient: filterVideos raw response type:`, typeof response);
+            console.log(`PPCineClient: filterVideos is array:`, Array.isArray(response));
+            if (response && !Array.isArray(response) && typeof response === 'object') {
+                const keys = Object.keys(response);
+                console.log(`PPCineClient: filterVideos response keys (${keys.length}):`, keys.slice(0, 20).join(', '));
+                // Check if it's an array-like object
+                if (keys.length > 0 && keys.every(k => !isNaN(parseInt(k)))) {
+                    console.log(`PPCineClient: filterVideos - Detected array-like object with ${keys.length} numeric keys`);
                 }
             }
             
+            // Use helper to normalize response
+            const result = this.normalizeResponse(response);
+            
             console.log(`PPCineClient: filterVideos returned ${result.length} items`);
+            if (result.length > 0) {
+                console.log(`PPCineClient: filterVideos first item sample:`, JSON.stringify(result[0]).substring(0, 200));
+            }
             return result;
         } catch (error) {
             console.error('PPCineClient: filterVideos error:', error.message);
             if (error.response) {
                 console.error('PPCineClient: Error status:', error.response.status);
-                console.error('PPCineClient: Error data:', JSON.stringify(error.response.data).substring(0, 300));
+                console.error('PPCineClient: Error data:', JSON.stringify(error.response.data).substring(0, 500));
             }
             return [];
         }
@@ -647,6 +691,11 @@ app.get('/catalog/:type/:id', async (req, res) => {
 
         // Log result for debugging
         console.log(`Catalog ${id}: Returning ${metas.length} items`);
+        if (metas.length === 0) {
+            console.warn(`Catalog ${id}: No items found - this might indicate an API issue`);
+        } else {
+            console.log(`Catalog ${id}: First item:`, JSON.stringify(metas[0]).substring(0, 150));
+        }
         
         res.json({ metas });
     } catch (error) {
