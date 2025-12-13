@@ -530,12 +530,31 @@ class PPCineClient {
         const cacheKey = `video_${vodId}_${sourceId || 'default'}`;
         const cached = this.getCached(cacheKey);
         if (cached) return cached;
+
         const params = { vod_id: vodId };
         if (sourceId) params.source_id = sourceId;
-        const response = await this.request('api/vod/info', params);
-        // Handle different response formats
-        const result = response?.result || response?.data || (typeof response === 'object' && !response.code ? response : null);
-        if (result) this.setCache(cacheKey, result);
+
+        // Try info_new endpoint first (has vod_collection with stream URLs)
+        let response = await this.request('api/vod/info_new', params);
+        let result = response?.result || response?.data ||
+            (typeof response === 'object' && !response.code ? response : null);
+
+        // Fallback to info endpoint if info_new doesn't return data
+        if (!result || (!result.vod_collection && !result.vod_url)) {
+            console.log('PPCineClient: info_new returned no streaming data, trying info endpoint');
+            response = await this.request('api/vod/info', params);
+            result = response?.result || response?.data ||
+                (typeof response === 'object' && !response.code ? response : null);
+        }
+
+        if (result) {
+            // Log vod_collection status for debugging
+            const hasStreams = result.vod_collection &&
+                Array.isArray(result.vod_collection) &&
+                result.vod_collection.length > 0;
+            console.log(`PPCineClient: Video ${vodId} has ${hasStreams ? result.vod_collection.length : 0} streams`);
+            this.setCache(cacheKey, result);
+        }
         return result;
     }
 
