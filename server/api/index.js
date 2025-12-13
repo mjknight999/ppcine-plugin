@@ -13,6 +13,16 @@ const app = express();
 // PPCINE CLIENT
 // ============================================
 class PPCineClient {
+    // Generate a more Android-like device ID (32 char hex string)
+    static generateDeviceId() {
+        const chars = '0123456789abcdef';
+        let deviceId = '';
+        for (let i = 0; i < 32; i++) {
+            deviceId += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return deviceId;
+    }
+    
     constructor() {
         // Try multiple base URLs (Android app uses kuht.52s7g.com, but init may redirect)
         this.baseURLs = [
@@ -20,7 +30,7 @@ class PPCineClient {
             'https://kuht.52s7g.com/'
         ];
         this.baseURL = this.baseURLs[0];
-        this.deviceId = 'plugin_' + Math.random().toString(36).substring(2, 15);
+        this.deviceId = PPCineClient.generateDeviceId();
         this.token = null;
         this.initialized = false;
         this.initializationAttempted = false;
@@ -41,11 +51,16 @@ class PPCineClient {
     }
 
     isInitialized() { return this.initialized; }
+    
+    generateDeviceId() {
+        return PPCineClient.generateDeviceId();
+    }
 
     async initialize() {
         if (this.initializationAttempted && !this.initialized) {
-            console.log('PPCineClient: Previous initialization failed, skipping retry');
-            return null;
+            console.log('PPCineClient: Previous initialization failed, will retry with different approach');
+            // Allow retry but with different device_id format
+            this.deviceId = this.generateDeviceId();
         }
         
         this.initializationAttempted = true;
@@ -56,53 +71,86 @@ class PPCineClient {
                 console.log('PPCineClient: Initializing with device_id:', this.deviceId);
                 console.log('PPCineClient: Trying base URL:', baseUrl);
                 
-                // Temporarily set base URL for this attempt
-                const originalBaseURL = this.baseURL;
+                // Set base URL for this attempt
                 this.baseURL = baseUrl;
                 this.client.defaults.baseURL = baseUrl;
                 
                 const response = await this.request('api/public/init', {
                     device_id: this.deviceId,
                     is_install: '1'
-                });
+                }, true);
 
-                console.log('PPCineClient: Init response received:', JSON.stringify(response).substring(0, 300));
+                console.log('PPCineClient: Init response received:', JSON.stringify(response).substring(0, 500));
 
-                if (response && response.result) {
-                    if (response.result.user_info?.token) {
-                        this.token = response.result.user_info.token;
-                        console.log('PPCineClient: Token received');
-                    }
-                    if (response.result.sys_conf?.api_url2) {
-                        const newBaseURL = response.result.sys_conf.api_url2;
-                        if (!newBaseURL.endsWith('/')) {
-                            this.baseURL = newBaseURL + '/';
-                        } else {
-                            this.baseURL = newBaseURL;
+                // Handle different response formats
+                if (response) {
+                    // Format 1: { result: { user_info: { token }, sys_conf: { api_url2 } } }
+                    if (response.result) {
+                        if (response.result.user_info?.token) {
+                            this.token = response.result.user_info.token;
+                            console.log('PPCineClient: Token received');
                         }
-                        this.client.defaults.baseURL = this.baseURL;
-                        console.log('PPCineClient: Updated base URL to:', this.baseURL);
-                    }
-                    this.initialized = true;
-                    console.log('PPCineClient: Initialization successful');
-                    return response.result;
-                } else if (response && response.code !== undefined) {
-                    console.warn('PPCineClient: Init returned code:', response.code, 'msg:', response.msg);
-                    // Some APIs return code 1 for success, others use result
-                    if (response.code === 1 || response.code === 200) {
+                        if (response.result.sys_conf?.api_url2) {
+                            const newBaseURL = response.result.sys_conf.api_url2;
+                            if (!newBaseURL.endsWith('/')) {
+                                this.baseURL = newBaseURL + '/';
+                            } else {
+                                this.baseURL = newBaseURL;
+                            }
+                            this.client.defaults.baseURL = this.baseURL;
+                            console.log('PPCineClient: Updated base URL to:', this.baseURL);
+                        }
                         this.initialized = true;
-                        console.log('PPCineClient: Initialization successful (code-based)');
+                        console.log('PPCineClient: Initialization successful (result format)');
+                        return response.result;
+                    }
+                    
+                    // Format 2: { code: 1, msg: "...", data: {...} }
+                    if (response.code !== undefined) {
+                        console.log('PPCineClient: Init returned code:', response.code, 'msg:', response.msg);
+                        if (response.code === 1 || response.code === 200) {
+                            if (response.data) {
+                                if (response.data.user_info?.token) {
+                                    this.token = response.data.user_info.token;
+                                }
+                                if (response.data.sys_conf?.api_url2) {
+                                    const newBaseURL = response.data.sys_conf.api_url2;
+                                    this.baseURL = newBaseURL.endsWith('/') ? newBaseURL : newBaseURL + '/';
+                                    this.client.defaults.baseURL = this.baseURL;
+                                }
+                            }
+                            this.initialized = true;
+                            console.log('PPCineClient: Initialization successful (code format)');
+                            return response;
+                        }
+                    }
+                    
+                    // Format 3: Direct data
+                    if (response.user_info || response.sys_conf) {
+                        if (response.user_info?.token) {
+                            this.token = response.user_info.token;
+                        }
+                        if (response.sys_conf?.api_url2) {
+                            const newBaseURL = response.sys_conf.api_url2;
+                            this.baseURL = newBaseURL.endsWith('/') ? newBaseURL : newBaseURL + '/';
+                            this.client.defaults.baseURL = this.baseURL;
+                        }
+                        this.initialized = true;
+                        console.log('PPCineClient: Initialization successful (direct format)');
                         return response;
                     }
                 }
                 
-                // If we get here, this base URL didn't work, try next
-                console.log('PPCineClient: Base URL', baseUrl, 'did not work, trying next...');
+                // If we get here, response format not recognized
+                console.warn('PPCineClient: Unrecognized response format for', baseUrl);
+                console.warn('PPCineClient: Response keys:', Object.keys(response || {}));
             } catch (error) {
                 console.error('PPCineClient: Initialize error with', baseUrl, ':', error.message);
                 if (error.response) {
                     console.error('PPCineClient: Response status:', error.response.status);
-                    console.error('PPCineClient: Response data:', JSON.stringify(error.response.data).substring(0, 200));
+                    console.error('PPCineClient: Response data:', JSON.stringify(error.response.data).substring(0, 500));
+                } else if (error.code) {
+                    console.error('PPCineClient: Error code:', error.code);
                 }
                 // Continue to next base URL
                 continue;
@@ -111,11 +159,22 @@ class PPCineClient {
         
         // If all base URLs failed, mark as attempted but not initialized
         console.error('PPCineClient: All initialization attempts failed');
+        console.error('PPCineClient: Will continue without initialization - some endpoints may work');
         this.initialized = false;
         return null;
     }
+    
+    generateDeviceId() {
+        // Generate a more Android-like device ID
+        const chars = '0123456789abcdef';
+        let deviceId = '';
+        for (let i = 0; i < 32; i++) {
+            deviceId += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return deviceId;
+    }
 
-    async request(endpoint, params = {}) {
+    async request(endpoint, params = {}, skipInit = false) {
         const allParams = { device_id: this.deviceId, ...params };
         if (this.token) allParams.token = this.token;
 
@@ -130,8 +189,22 @@ class PPCineClient {
             
             const response = await this.client.post(endpoint, formData.toString());
             
-            if (response.data && response.data.code !== undefined && response.data.code !== 1 && response.data.code !== 200) {
-                console.warn(`PPCineClient: API returned code ${response.data.code}:`, response.data.msg || 'Unknown error');
+            // Log full response for debugging
+            if (endpoint === 'api/public/init' || response.status >= 400) {
+                console.log(`PPCineClient: Full response for ${endpoint}:`, JSON.stringify(response.data).substring(0, 500));
+            }
+            
+            // Check for error codes in response
+            if (response.data) {
+                if (response.data.code !== undefined) {
+                    if (response.data.code === 1 || response.data.code === 200) {
+                        // Success code
+                        return response.data;
+                    } else {
+                        console.warn(`PPCineClient: API returned code ${response.data.code}:`, response.data.msg || 'Unknown error');
+                        // Still return data, some endpoints might work with non-1 codes
+                    }
+                }
             }
             
             return response.data;
@@ -139,9 +212,19 @@ class PPCineClient {
             console.error(`PPCineClient: Request failed for ${endpoint}:`, error.message);
             if (error.response) {
                 console.error(`PPCineClient: Response status: ${error.response.status}`);
-                console.error(`PPCineClient: Response data:`, JSON.stringify(error.response.data).substring(0, 200));
+                console.error(`PPCineClient: Response headers:`, JSON.stringify(error.response.headers).substring(0, 200));
+                if (error.response.data) {
+                    console.error(`PPCineClient: Response data:`, JSON.stringify(error.response.data).substring(0, 500));
+                }
             } else if (error.request) {
                 console.error('PPCineClient: No response received - network error');
+                console.error('PPCineClient: Request config:', JSON.stringify({
+                    url: error.config?.url,
+                    method: error.config?.method,
+                    baseURL: error.config?.baseURL
+                }));
+            } else {
+                console.error('PPCineClient: Error setting up request:', error.message);
             }
             throw error;
         }
@@ -251,13 +334,29 @@ class PPCineClient {
         
         try {
             console.log(`PPCineClient: filterVideos - typeId: ${typeId}, page: ${page}, params:`, params);
-            const response = await this.request('api/search/screen', params);
-            const result = response.result || [];
+            // Try without initialization - some endpoints might work
+            const response = await this.request('api/search/screen', params, true);
+            
+            // Handle different response formats
+            let result = [];
+            if (response) {
+                if (response.result) {
+                    result = Array.isArray(response.result) ? response.result : [];
+                } else if (Array.isArray(response)) {
+                    result = response;
+                } else if (response.code === 1 && response.data) {
+                    result = Array.isArray(response.data) ? response.data : [];
+                }
+            }
+            
             console.log(`PPCineClient: filterVideos returned ${result.length} items`);
             return result;
         } catch (error) {
             console.error('PPCineClient: filterVideos error:', error.message);
-            console.error('PPCineClient: Error response:', error.response?.data || 'No response data');
+            if (error.response) {
+                console.error('PPCineClient: Error status:', error.response.status);
+                console.error('PPCineClient: Error data:', JSON.stringify(error.response.data).substring(0, 300));
+            }
             return [];
         }
     }
@@ -451,26 +550,23 @@ app.get('/catalog/:type/:id', async (req, res) => {
             search: req.query.search || null
         };
 
-        // Initialize if needed (with timeout) - but continue even if it fails
-        if (!ppcine.isInitialized()) {
+        // Try to initialize, but don't block if it fails - some endpoints work without init
+        if (!ppcine.isInitialized() && !ppcine.initializationAttempted) {
             try {
-                console.log('Catalog endpoint: Initializing PPCine client...');
-                await Promise.race([
-                    ppcine.initialize(),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Initialization timeout')), 20000))
-                ]);
-                if (ppcine.isInitialized()) {
-                    console.log('Catalog endpoint: Initialization successful');
-                } else {
-                    console.warn('Catalog endpoint: Initialization completed but not marked as initialized');
-                }
+                console.log('Catalog endpoint: Attempting initialization (non-blocking)...');
+                // Don't wait for initialization - make it fire-and-forget
+                ppcine.initialize().catch(err => {
+                    console.warn('Catalog endpoint: Background initialization failed:', err.message);
+                });
+                // Give it a moment, but don't block
+                await new Promise(resolve => setTimeout(resolve, 2000));
             } catch (initError) {
-                console.error('Catalog endpoint: Initialization error:', initError.message);
-                // Continue anyway - some endpoints might work without full initialization
+                console.warn('Catalog endpoint: Initialization attempt error:', initError.message);
             }
-        } else {
-            console.log('Catalog endpoint: PPCine client already initialized');
         }
+        
+        // Continue with catalog fetch regardless of initialization status
+        console.log('Catalog endpoint: Proceeding with catalog fetch (initialized:', ppcine.isInitialized(), ')');
 
         let metas = [];
         const page = Math.floor(extra.skip / 20) + 1;
