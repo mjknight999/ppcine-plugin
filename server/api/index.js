@@ -17,14 +17,14 @@ const app = express();
 class PPCineClient {
     // ==========================================
     // AUTHENTICATION CONSTANTS (extracted from Android app)
-    // ==========================================
-    static SECRET_KEY = '47Q8tBqO4YqrMHf4'; // Decrypted from Android app's encrypted key
     static APP_ID = 'movieph';
     static VERSION = '40000';
     static SYS_PLATFORM = '2'; // 2 = Android
     static CHANNEL_CODE = 'movieph_1002'; // From AndroidManifest UMENG_CHANNEL
 
     // AES decryption constants (from ak/a.java - AESOperator)
+    // Secret key from da.e.A() - this gets Base64 encoded before combining with device_id and timestamp
+    static BASE_SECRET = 'MxASAkl/yHTGg+/Tw1R7u96nGqkWsOZ2';
     static AES_KEY = '0123456789123456';
     static AES_IV = '2015030120123456';
 
@@ -33,9 +33,13 @@ class PPCineClient {
         return crypto.createHash('md5').update(str).digest('hex');
     }
 
-    // Generate signature: MD5(SECRET_KEY + device_id + timestamp).toUpperCase()
+    // Generate signature matching Android's da.e.x(da.e.y(curTime))
+    // y(str) = Base64Encode(A()) + deviceId + str
+    // x(str) = MD5(str).toUpperCase()
     static generateSign(deviceId, timestamp) {
-        const toHash = PPCineClient.SECRET_KEY + deviceId + timestamp;
+        // First Base64-encode the secret (ak.f.a does Base64 encoding)
+        const base64Secret = Buffer.from(PPCineClient.BASE_SECRET).toString('base64');
+        const toHash = base64Secret + deviceId + timestamp;
         return PPCineClient.md5(toHash).toUpperCase();
     }
 
