@@ -1073,6 +1073,40 @@ app.get('/health', async (req, res) => {
     });
 });
 
+// Debug endpoint to see raw API response
+app.get('/debug/video/:id', async (req, res) => {
+    try {
+        const vodId = parseInt(req.params.id);
+        if (!ppcine.isInitialized()) await ppcine.initialize();
+
+        // Try info_new first
+        const infoNewResponse = await ppcine.request('api/vod/info_new', { vod_id: vodId });
+        const infoNewResult = infoNewResponse?.result || infoNewResponse?.data || infoNewResponse;
+
+        // Try info endpoint
+        const infoResponse = await ppcine.request('api/vod/info', { vod_id: vodId });
+        const infoResult = infoResponse?.result || infoResponse?.data || infoResponse;
+
+        res.json({
+            vodId,
+            info_new: {
+                hasVodCollection: !!(infoNewResult?.vod_collection),
+                vodCollectionLength: infoNewResult?.vod_collection?.length || 0,
+                vodCollectionSample: infoNewResult?.vod_collection?.[0] || null,
+                allKeys: infoNewResult ? Object.keys(infoNewResult) : []
+            },
+            info: {
+                hasVodCollection: !!(infoResult?.vod_collection),
+                vodCollectionLength: infoResult?.vod_collection?.length || 0,
+                vodCollectionSample: infoResult?.vod_collection?.[0] || null,
+                allKeys: infoResult ? Object.keys(infoResult) : []
+            }
+        });
+    } catch (error) {
+        res.json({ error: error.message });
+    }
+});
+
 // ============================================
 // DYNAMIC CATEGORIES ENDPOINT
 // ============================================
