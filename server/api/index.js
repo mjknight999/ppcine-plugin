@@ -326,7 +326,8 @@ const manifest = {
 };
 
 app.get('/manifest.json', (req, res) => {
-    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    // Force HTTPS for baseUrl (Vercel always uses HTTPS)
+    const baseUrl = `https://${req.get('host')}`;
     res.json({ ...manifest, baseUrl });
 });
 
@@ -344,7 +345,18 @@ app.get('/catalog/:type/:id', async (req, res) => {
             search: req.query.search || null
         };
 
-        if (!ppcine.isInitialized()) await ppcine.initialize();
+        // Initialize if needed (with timeout)
+        if (!ppcine.isInitialized()) {
+            try {
+                await Promise.race([
+                    ppcine.initialize(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Initialization timeout')), 10000))
+                ]);
+            } catch (initError) {
+                console.error('Initialization error (continuing anyway):', initError.message);
+                // Continue even if initialization fails - will retry on next request
+            }
+        }
 
         let metas = [];
         const page = Math.floor(extra.skip / 20) + 1;
@@ -413,9 +425,13 @@ app.get('/catalog/:type/:id', async (req, res) => {
             });
         }
 
+        // Log result for debugging
+        console.log(`Catalog ${id}: Returning ${metas.length} items`);
+        
         res.json({ metas });
     } catch (error) {
         console.error('Catalog error:', error.message);
+        console.error('Catalog error stack:', error.stack);
         res.json({ metas: [], error: error.message });
     }
 });
