@@ -44,6 +44,7 @@ class PPCineClient {
         try {
             // Base64 decode
             const encrypted = Buffer.from(encryptedBase64, 'base64');
+            console.log(`PPCineClient: Decrypting ${encrypted.length} bytes`);
 
             // AES decrypt using CBC mode with PKCS5 padding
             const decipher = crypto.createDecipheriv('aes-128-cbc',
@@ -54,7 +55,8 @@ class PPCineClient {
 
             return decrypted.toString('utf8');
         } catch (e) {
-            console.error('PPCineClient: Decryption error:', e.message);
+            console.error(`PPCineClient: Decryption error: ${e.message}`);
+            console.error(`PPCineClient: Encrypted data starts with: ${encryptedBase64.substring(0, 50)}...`);
             return null;
         }
     }
@@ -293,7 +295,17 @@ class PPCineClient {
                             responseData = decrypted;
                         }
                     } else {
-                        console.error('PPCineClient: Failed to decrypt response');
+                        console.error('PPCineClient: Failed to decrypt response for', endpoint);
+                        // Try to parse the raw response as-is (might be an error message)
+                        try {
+                            const trimmed = responseData.trim();
+                            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                                responseData = JSON.parse(trimmed);
+                                console.log(`PPCineClient: Parsed raw response for ${endpoint}`);
+                            }
+                        } catch (e2) {
+                            console.error('PPCineClient: Could not parse raw response either');
+                        }
                     }
                 } else {
                     // Already JSON string, parse it
