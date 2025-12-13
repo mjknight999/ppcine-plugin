@@ -17,14 +17,14 @@ const app = express();
 class PPCineClient {
     // ==========================================
     // AUTHENTICATION CONSTANTS (extracted from Android app)
+    // ==========================================
+    static SECRET_KEY = '47Q8tBqO4YqrMHf4'; // Decrypted from Android app's encrypted key
     static APP_ID = 'movieph';
     static VERSION = '40000';
     static SYS_PLATFORM = '2'; // 2 = Android
     static CHANNEL_CODE = 'movieph_1002'; // From AndroidManifest UMENG_CHANNEL
 
     // AES decryption constants (from ak/a.java - AESOperator)
-    // Secret key from da.e.A() - this gets Base64 encoded before combining with device_id and timestamp
-    static BASE_SECRET = 'MxASAkl/yHTGg+/Tw1R7u96nGqkWsOZ2';
     static AES_KEY = '0123456789123456';
     static AES_IV = '2015030120123456';
 
@@ -33,41 +33,17 @@ class PPCineClient {
         return crypto.createHash('md5').update(str).digest('hex');
     }
 
-    // Generate signature matching Android's da.e.x(da.e.y(curTime))
-    // y(str) = Base64Encode(A()) + deviceId + str
-    // x(str) = MD5(str).toUpperCase()
+    // Generate signature: MD5(SECRET_KEY + device_id + timestamp).toUpperCase()
     static generateSign(deviceId, timestamp) {
-        // First Base64-encode the secret (ak.f.a does Base64 encoding)
-        const base64Secret = Buffer.from(PPCineClient.BASE_SECRET).toString('base64');
-        const toHash = base64Secret + deviceId + timestamp;
+        const toHash = PPCineClient.SECRET_KEY + deviceId + timestamp;
         return PPCineClient.md5(toHash).toUpperCase();
     }
 
     // Decrypt AES-encrypted API response (from ak/a.java)
     static decryptResponse(encryptedBase64) {
         try {
-            // Normalize Base64 string - handle URL-safe variant and padding
-            let normalized = encryptedBase64.trim();
-            // Convert URL-safe Base64 to standard Base64
-            normalized = normalized.replace(/-/g, '+').replace(/_/g, '/');
-            // Fix padding if needed
-            while (normalized.length % 4 !== 0) {
-                normalized += '=';
-            }
-
             // Base64 decode
-            const encrypted = Buffer.from(normalized, 'base64');
-            console.log(`PPCineClient: Decrypting ${encrypted.length} bytes from ${encryptedBase64.length} chars`);
-
-            // Check if data is valid for AES-128-CBC (must be multiple of 16)
-            if (encrypted.length === 0) {
-                console.error('PPCineClient: Empty encrypted data');
-                return null;
-            }
-            if (encrypted.length % 16 !== 0) {
-                console.error(`PPCineClient: Invalid data length ${encrypted.length}, not multiple of 16`);
-                return null;
-            }
+            const encrypted = Buffer.from(encryptedBase64, 'base64');
 
             // AES decrypt using CBC mode with PKCS5 padding
             const decipher = crypto.createDecipheriv('aes-128-cbc',
@@ -78,11 +54,7 @@ class PPCineClient {
 
             return decrypted.toString('utf8');
         } catch (e) {
-            console.error(`PPCineClient: Decryption error: ${e.message}`);
-            // Log more details for debugging
-            const len = encryptedBase64 ? encryptedBase64.length : 0;
-            const preview = encryptedBase64 ? encryptedBase64.substring(0, 60) : 'null';
-            console.error(`PPCineClient: Input: len=${len}, starts='${preview}...'`);
+            console.error('PPCineClient: Decryption error:', e.message);
             return null;
         }
     }
@@ -321,17 +293,7 @@ class PPCineClient {
                             responseData = decrypted;
                         }
                     } else {
-                        console.error('PPCineClient: Failed to decrypt response for', endpoint);
-                        // Try to parse the raw response as-is (might be an error message)
-                        try {
-                            const trimmed = responseData.trim();
-                            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-                                responseData = JSON.parse(trimmed);
-                                console.log(`PPCineClient: Parsed raw response for ${endpoint}`);
-                            }
-                        } catch (e2) {
-                            console.error('PPCineClient: Could not parse raw response either');
-                        }
+                        console.error('PPCineClient: Failed to decrypt response');
                     }
                 } else {
                     // Already JSON string, parse it
@@ -1109,40 +1071,6 @@ app.get('/health', async (req, res) => {
         baseURL: ppcine.baseURL,
         deviceId: ppcine.deviceId.substring(0, 20) + '...'
     });
-});
-
-// Debug endpoint to see raw API response
-app.get('/debug/video/:id', async (req, res) => {
-    try {
-        const vodId = parseInt(req.params.id);
-        if (!ppcine.isInitialized()) await ppcine.initialize();
-
-        // Use the internal request method which handles auth
-        const infoNewResult = await ppcine.request('api/vod/info_new', { vod_id: vodId });
-        const infoResult = await ppcine.request('api/vod/info', { vod_id: vodId });
-
-        res.json({
-            vodId,
-            info_new: {
-                type: typeof infoNewResult,
-                hasVodCollection: !!(infoNewResult?.vod_collection || infoNewResult?.result?.vod_collection),
-                vodCollectionLength: (infoNewResult?.vod_collection || infoNewResult?.result?.vod_collection)?.length || 0,
-                firstItem: (infoNewResult?.vod_collection || infoNewResult?.result?.vod_collection)?.[0] || null,
-                allKeys: infoNewResult ? Object.keys(infoNewResult) : [],
-                raw: typeof infoNewResult === 'string' ? infoNewResult.substring(0, 200) : null
-            },
-            info: {
-                type: typeof infoResult,
-                hasVodCollection: !!(infoResult?.vod_collection || infoResult?.result?.vod_collection),
-                vodCollectionLength: (infoResult?.vod_collection || infoResult?.result?.vod_collection)?.length || 0,
-                firstItem: (infoResult?.vod_collection || infoResult?.result?.vod_collection)?.[0] || null,
-                allKeys: infoResult ? Object.keys(infoResult) : [],
-                raw: typeof infoResult === 'string' ? infoResult.substring(0, 200) : null
-            }
-        });
-    } catch (error) {
-        res.json({ error: error.message });
-    }
 });
 
 // ============================================
