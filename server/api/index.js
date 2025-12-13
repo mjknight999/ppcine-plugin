@@ -360,7 +360,8 @@ class PPCineClient {
         const cached = this.getCached('channels');
         if (cached) return cached;
         const response = await this.request('api/channel/get_list', { channel_id: 0 });
-        const result = response.result || [];
+        // Handle different response formats
+        const result = Array.isArray(response?.result) ? response.result : (Array.isArray(response) ? response : []);
         this.setCache('channels', result);
         return result;
     }
@@ -372,7 +373,8 @@ class PPCineClient {
         const response = await this.request('api/channel/get_info', {
             channel_id: channelId, pn: page, psize: 100
         });
-        const result = response.result || [];
+        // Handle different response formats
+        const result = Array.isArray(response?.result) ? response.result : (Array.isArray(response) ? response : []);
         this.setCache(cacheKey, result);
         return result;
     }
@@ -381,7 +383,15 @@ class PPCineClient {
         try {
             console.log(`PPCineClient: getRankingVideos - topicId: ${topicId}, page: ${page}`);
             const response = await this.request('api/topic/vod_list', { topic_id: topicId, pn: page });
-            const result = response.result?.list || [];
+            // Handle different response formats
+            let result = [];
+            if (response?.result?.list && Array.isArray(response.result.list)) {
+                result = response.result.list;
+            } else if (Array.isArray(response?.result)) {
+                result = response.result;
+            } else if (Array.isArray(response)) {
+                result = response;
+            }
             console.log(`PPCineClient: getRankingVideos returned ${result.length} items`);
             return result;
         } catch (error) {
@@ -390,6 +400,7 @@ class PPCineClient {
             return [];
         }
     }
+
 
     async getSpecialLists(typeId = 1) {
         const cached = this.getCached(`special_${typeId}`);
@@ -400,10 +411,25 @@ class PPCineClient {
         try {
             console.log(`PPCineClient: getSpecialLists - typeId: ${typeId}`);
             const response = await this.request('api/topic/list', { type_id: typeId });
-            const result = response.result || [];
-            console.log(`PPCineClient: getSpecialLists returned ${result.length} topics`);
-            this.setCache(`special_${typeId}`, result);
-            return result;
+
+            // Handle different response formats
+            let result = [];
+            if (response) {
+                if (Array.isArray(response.result)) {
+                    result = response.result;
+                } else if (Array.isArray(response)) {
+                    result = response;
+                } else if (response.result && typeof response.result === 'object') {
+                    // result might be an object with topics inside
+                    result = response.result.list || response.result.data || [];
+                }
+            }
+
+            console.log(`PPCineClient: getSpecialLists returned ${Array.isArray(result) ? result.length : 0} topics`);
+            if (Array.isArray(result)) {
+                this.setCache(`special_${typeId}`, result);
+            }
+            return Array.isArray(result) ? result : [];
         } catch (error) {
             console.error('PPCineClient: getSpecialLists error:', error.message);
             console.error('PPCineClient: Error response:', error.response?.data || 'No response data');
@@ -411,9 +437,15 @@ class PPCineClient {
         }
     }
 
+
     async findTrendingTopic(typeId = 1) {
         try {
             const topics = await this.getSpecialLists(typeId);
+            // Ensure topics is an array
+            if (!Array.isArray(topics) || topics.length === 0) {
+                console.log('PPCineClient: No topics array for trending, topics:', typeof topics);
+                return null;
+            }
             // Look for trending/hot topics (common names in Chinese/English)
             const trendingKeywords = ['trending', '热门', 'hot', 'hot', '推荐', 'recommend', '最新', 'latest'];
             return topics.find(t => {
@@ -429,17 +461,23 @@ class PPCineClient {
     async findLatestTopic(typeId = 1) {
         try {
             const topics = await this.getSpecialLists(typeId);
+            // Ensure topics is an array
+            if (!Array.isArray(topics) || topics.length === 0) {
+                console.log('PPCineClient: No topics array for latest, topics:', typeof topics);
+                return null;
+            }
             // Look for latest/new topics
             const latestKeywords = ['latest', '最新', 'new', 'newest', '最近', 'recent'];
             return topics.find(t => {
                 const name = (t.name || t.title || '').toLowerCase();
                 return latestKeywords.some(keyword => name.includes(keyword));
-            }) || topics[1]; // Fallback to second topic if no match
+            }) || (topics.length > 1 ? topics[1] : topics[0]); // Fallback to second topic or first
         } catch (error) {
             console.error('Error finding latest topic:', error.message);
             return null;
         }
     }
+
 
     async filterVideos(typeId, options = {}) {
         const { genre, area, year, page = 1 } = options;
@@ -456,14 +494,17 @@ class PPCineClient {
             // Handle different response formats
             let result = [];
             if (response) {
-                if (response.result) {
-                    result = Array.isArray(response.result) ? response.result : [];
+                if (Array.isArray(response.result)) {
+                    result = response.result;
                 } else if (Array.isArray(response)) {
                     result = response;
-                } else if (response.code === 1 && response.data) {
+                } else if ((response.code === 10000 || response.code === 1) && response.result) {
+                    result = Array.isArray(response.result) ? response.result : [];
+                } else if (response.data) {
                     result = Array.isArray(response.data) ? response.data : [];
                 }
             }
+
 
             console.log(`PPCineClient: filterVideos returned ${result.length} items`);
             return result;
@@ -479,7 +520,10 @@ class PPCineClient {
 
     async search(keyword, page = 1) {
         const response = await this.request('api/search/result', { wd: keyword, pn: page });
-        return response.result || [];
+        // Handle different response formats
+        if (Array.isArray(response?.result)) return response.result;
+        if (Array.isArray(response)) return response;
+        return [];
     }
 
     async getVideoDetails(vodId, sourceId = null) {
@@ -489,7 +533,8 @@ class PPCineClient {
         const params = { vod_id: vodId };
         if (sourceId) params.source_id = sourceId;
         const response = await this.request('api/vod/info', params);
-        const result = response.result;
+        // Handle different response formats
+        const result = response?.result || response?.data || (typeof response === 'object' && !response.code ? response : null);
         if (result) this.setCache(cacheKey, result);
         return result;
     }
@@ -498,14 +543,14 @@ class PPCineClient {
         const cached = this.getCached('hot_search');
         if (cached) return cached;
         const response = await this.request('api/search/hot_search');
-        const result = response.result || [];
+        const result = Array.isArray(response?.result) ? response.result : (Array.isArray(response) ? response : []);
         this.setCache('hot_search', result);
         return result;
     }
 
     async getSearchSuggestions(keyword) {
         const response = await this.request('api/search/suggest', { wd: keyword });
-        return response.result || [];
+        return Array.isArray(response?.result) ? response.result : (Array.isArray(response) ? response : []);
     }
 
     transformToMeta(video, type = 'movie') {
