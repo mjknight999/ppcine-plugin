@@ -556,6 +556,19 @@ class PPCineClient {
     transformToMeta(video, type = 'movie') {
         if (!video) return null;
         const id = video.id || video.vod_id;
+
+        // Get rating and ensure it's a string (iOS expects String?)
+        let rating = video.vod_douban_score || video.vod_score || null;
+        if (rating !== null && rating !== undefined) {
+            rating = String(rating);
+        }
+
+        // Get year and ensure it's a string (iOS expects String?)
+        let year = video.vod_year || null;
+        if (year !== null && year !== undefined) {
+            year = String(year);
+        }
+
         return {
             id: `ppcine:${id}`,
             type: type,
@@ -563,24 +576,25 @@ class PPCineClient {
             poster: video.vod_pic || null,
             background: video.vod_pic || null,
             description: video.vod_blurb || video.vod_content || '',
-            year: video.vod_year || null,
+            year: year,  // String
             genres: video.vod_tag ? video.vod_tag.split(',').map(g => g.trim()) : [],
-            rating: video.vod_douban_score || video.vod_score || null,
+            rating: rating,  // String
             cast: video.vod_actor ? video.vod_actor.split(',').map(a => a.trim()) : [],
             director: video.vod_director ? video.vod_director.split(',').map(d => d.trim()) : [],
-            country: video.vod_area || null,
-            runtime: this.calculateRuntime(video),
+            country: video.vod_area ? String(video.vod_area) : null,  // String
+            runtime: this.calculateRuntime(video),  // Already returns String
             status: video.vod_isend === 1 ? 'Completed' : 'Ongoing',
-            totalEpisodes: video.vod_total ? parseInt(video.vod_total) : null,
-            currentEpisode: video.vod_serial ? parseInt(video.vod_serial) : null,
+            totalEpisodes: video.vod_total ? parseInt(video.vod_total) : null,  // Int
+            currentEpisode: video.vod_serial ? parseInt(video.vod_serial) : null,  // Int
             remarks: video.remarks || video.vod_remarks || null,
-            ppcineId: id,
+            ppcineId: typeof id === 'number' ? id : parseInt(id) || null,  // Int
             episodes: this.transformEpisodes(video.vod_collection),
             ...(type === 'series' && {
                 videos: this.transformEpisodesToVideos(video.vod_collection, id)
             })
         };
     }
+
 
     transformEpisodes(vodCollection) {
         if (!vodCollection || !Array.isArray(vodCollection)) return [];
