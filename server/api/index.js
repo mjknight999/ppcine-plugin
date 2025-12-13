@@ -42,9 +42,28 @@ class PPCineClient {
     // Decrypt AES-encrypted API response (from ak/a.java)
     static decryptResponse(encryptedBase64) {
         try {
+            // Normalize Base64 string - handle URL-safe variant and padding
+            let normalized = encryptedBase64.trim();
+            // Convert URL-safe Base64 to standard Base64
+            normalized = normalized.replace(/-/g, '+').replace(/_/g, '/');
+            // Fix padding if needed
+            while (normalized.length % 4 !== 0) {
+                normalized += '=';
+            }
+
             // Base64 decode
-            const encrypted = Buffer.from(encryptedBase64, 'base64');
-            console.log(`PPCineClient: Decrypting ${encrypted.length} bytes`);
+            const encrypted = Buffer.from(normalized, 'base64');
+            console.log(`PPCineClient: Decrypting ${encrypted.length} bytes from ${encryptedBase64.length} chars`);
+
+            // Check if data is valid for AES-128-CBC (must be multiple of 16)
+            if (encrypted.length === 0) {
+                console.error('PPCineClient: Empty encrypted data');
+                return null;
+            }
+            if (encrypted.length % 16 !== 0) {
+                console.error(`PPCineClient: Invalid data length ${encrypted.length}, not multiple of 16`);
+                return null;
+            }
 
             // AES decrypt using CBC mode with PKCS5 padding
             const decipher = crypto.createDecipheriv('aes-128-cbc',
@@ -56,7 +75,10 @@ class PPCineClient {
             return decrypted.toString('utf8');
         } catch (e) {
             console.error(`PPCineClient: Decryption error: ${e.message}`);
-            console.error(`PPCineClient: Encrypted data starts with: ${encryptedBase64.substring(0, 50)}...`);
+            // Log more details for debugging
+            const len = encryptedBase64 ? encryptedBase64.length : 0;
+            const preview = encryptedBase64 ? encryptedBase64.substring(0, 60) : 'null';
+            console.error(`PPCineClient: Input: len=${len}, starts='${preview}...'`);
             return null;
         }
     }
@@ -1091,58 +1113,31 @@ app.get('/debug/video/:id', async (req, res) => {
         const vodId = parseInt(req.params.id);
         if (!ppcine.isInitialized()) await ppcine.initialize();
 
-        // Get raw responses directly
-        const authHeaders = ppcine.buildAuthHeaders();
-        const formData = new URLSearchParams();
-        formData.append('vod_id', vodId);
-        Object.entries(authHeaders).forEach(([key, value]) => formData.append(key, value));
-
-        let rawInfoNewResponse = null;
-        let rawInfoResponse = null;
-
-        try {
-            const resp1 = await ppcine.client.post('api/vod/info_new', formData.toString(), {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'User-Agent': 'okhttp/4.9.0'
-                },
-                responseType: 'text'
-            });
-            rawInfoNewResponse = resp1.data;
-        } catch (e) {
-            rawInfoNewResponse = `Error: ${e.message}`;
-        }
-
-        try {
-            const resp2 = await ppcine.client.post('api/vod/info', formData.toString(), {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'User-Agent': 'okhttp/4.9.0'
-                },
-                responseType: 'text'
-            });
-            rawInfoResponse = resp2.data;
-        } catch (e) {
-            rawInfoResponse = `Error: ${e.message}`;
-        }
+        // Use the internal request method which handles auth
+        const infoNewResult = await ppcine.request('api/vod/info_new', { vod_id: vodId });
+        const infoResult = await ppcine.request('api/vod/info', { vod_id: vodId });
 
         res.json({
             vodId,
             info_new: {
-                type: typeof rawInfoNewResponse,
-                length: rawInfoNewResponse ? rawInfoNewResponse.length : 0,
-                startsWithJson: rawInfoNewResponse ? rawInfoNewResponse.startsWith('{') : false,
-                first200chars: rawInfoNewResponse ? rawInfoNewResponse.substring(0, 200) : null
+                type: typeof infoNewResult,
+                hasVodCollection: !!(infoNewResult?.vod_collection || infoNewResult?.result?.vod_collection),
+                vodCollectionLength: (infoNewResult?.vod_collection || infoNewResult?.result?.vod_collection)?.length || 0,
+                firstItem: (infoNewResult?.vod_collection || infoNewResult?.result?.vod_collection)?.[0] || null,
+                allKeys: infoNewResult ? Object.keys(infoNewResult) : [],
+                raw: typeof infoNewResult === 'string' ? infoNewResult.substring(0, 200) : null
             },
             info: {
-                type: typeof rawInfoResponse,
-                length: rawInfoResponse ? rawInfoResponse.length : 0,
-                startsWithJson: rawInfoResponse ? rawInfoResponse.startsWith('{') : false,
-                first200chars: rawInfoResponse ? rawInfoResponse.substring(0, 200) : null
+                type: typeof infoResult,
+                hasVodCollection: !!(infoResult?.vod_collection || infoResult?.result?.vod_collection),
+                vodCollectionLength: (infoResult?.vod_collection || infoResult?.result?.vod_collection)?.length || 0,
+                firstItem: (infoResult?.vod_collection || infoResult?.result?.vod_collection)?.[0] || null,
+                allKeys: infoResult ? Object.keys(infoResult) : [],
+                raw: typeof infoResult === 'string' ? infoResult.substring(0, 200) : null
             }
         });
     } catch (error) {
-        res.json({ error: error.message, stack: error.stack });
+        res.json({ error: error.message });
     }
 });
 
