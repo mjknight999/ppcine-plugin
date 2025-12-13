@@ -818,6 +818,22 @@ app.get('/catalog/:type/:id', async (req, res) => {
                 const contentType = (v.type_id === 1 || v.type_pid === 1) ? 'movie' : 'series';
                 return ppcine.transformToMeta(v, contentType);
             });
+        } else if (id.startsWith('topic-')) {
+            // Dynamic topic-based catalog - fetch from specific topic ID
+            const topicId = parseInt(id.replace('topic-', ''));
+            if (!isNaN(topicId)) {
+                try {
+                    console.log(`Catalog: Fetching topic ${topicId}, page ${page}`);
+                    const topicVideos = await ppcine.getRankingVideos(topicId, page);
+                    if (topicVideos && topicVideos.length > 0) {
+                        metas = topicVideos.map(v => ppcine.transformToMeta(v, type));
+                    }
+                    console.log(`Catalog topic-${topicId}: Got ${metas.length} items`);
+                } catch (error) {
+                    console.error(`Topic ${topicId} catalog error:`, error.message);
+                    metas = [];
+                }
+            }
         }
 
         // Log result for debugging
@@ -1037,6 +1053,74 @@ app.get('/health', async (req, res) => {
         deviceId: ppcine.deviceId.substring(0, 20) + '...'
     });
 });
+
+// ============================================
+// DYNAMIC CATEGORIES ENDPOINT
+// ============================================
+app.get('/categories', async (req, res) => {
+    try {
+        if (!ppcine.isInitialized()) {
+            try {
+                await ppcine.initialize();
+            } catch (initError) {
+                console.warn('Categories: Initialization failed:', initError.message);
+            }
+        }
+
+        // Fetch topics for movies (type_id=1) and series (type_id=2)
+        const [movieTopics, seriesTopics] = await Promise.all([
+            ppcine.getSpecialLists(1),
+            ppcine.getSpecialLists(2)
+        ]);
+
+        const categories = [];
+
+        // Add movie categories
+        if (Array.isArray(movieTopics)) {
+            movieTopics.forEach(topic => {
+                if (topic.id && topic.topic_name) {
+                    categories.push({
+                        id: `topic-${topic.id}`,
+                        name: topic.topic_name,
+                        type: 'movie',
+                        topicId: topic.id,
+                        extra: [{ name: 'skip', isRequired: false }]
+                    });
+                }
+            });
+        }
+
+        // Add series categories
+        if (Array.isArray(seriesTopics)) {
+            seriesTopics.forEach(topic => {
+                if (topic.id && topic.topic_name) {
+                    categories.push({
+                        id: `topic-${topic.id}`,
+                        name: topic.topic_name,
+                        type: 'series',
+                        topicId: topic.id,
+                        extra: [{ name: 'skip', isRequired: false }]
+                    });
+                }
+            });
+        }
+
+        // Add search as a special category
+        categories.push({
+            id: 'ppcine-search',
+            name: '🔍 Search',
+            type: 'movie',
+            extra: [{ name: 'search', isRequired: true }]
+        });
+
+        console.log(`Categories: Returning ${categories.length} categories`);
+        res.json({ categories });
+    } catch (error) {
+        console.error('Categories error:', error.message);
+        res.json({ categories: [], error: error.message });
+    }
+});
+
 
 // ============================================
 // ERROR HANDLING
