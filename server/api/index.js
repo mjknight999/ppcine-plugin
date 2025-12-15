@@ -530,12 +530,35 @@ class PPCineClient {
         const cacheKey = `video_${vodId}_${sourceId || 'default'}`;
         const cached = this.getCached(cacheKey);
         if (cached) return cached;
-        const params = { vod_id: vodId };
+
+        // Generate per-request timestamp and signature (matches Android app format)
+        const curTime = Math.floor(Date.now() / 1000).toString();
+        const signString = `${vodId}${curTime}${this.deviceId}`;
+        const requestSign = PPCineClient.md5(signString).toUpperCase();
+
+        const params = {
+            vod_id: vodId,
+            audio_type: 0,           // Default audio type
+            cur_time: curTime,       // Request timestamp
+            sign: requestSign        // Per-request signature
+        };
         if (sourceId) params.source_id = sourceId;
+
+        console.log(`PPCineClient: getVideoDetails - vod_id: ${vodId}, cur_time: ${curTime}`);
+
         // Use info_new endpoint to get vod_collection with streaming URLs (same as Android app)
         const response = await this.request('api/vod/info_new', params);
+
         // Handle different response formats
         const result = response?.result || response?.data || (typeof response === 'object' && !response.code ? response : null);
+
+        // Log if we got vod_collection
+        if (result?.vod_collection) {
+            console.log(`PPCineClient: Got vod_collection with ${result.vod_collection.length} episodes`);
+        } else {
+            console.log('PPCineClient: No vod_collection in response');
+        }
+
         if (result) this.setCache(cacheKey, result);
         return result;
     }
@@ -624,15 +647,25 @@ class PPCineClient {
     transformToStreams(video) {
         if (!video || !video.vod_collection) return [];
         return video.vod_collection.map((ep, index) => {
-            if (!ep.vod_url) return null;
+            // For non-P2P content (is_p2p=0), use orginal_url which can stream directly
+            // For P2P content (is_p2p=1), use vod_url (may need local proxy)
+            const isP2P = ep.is_p2p === 1;
+            const streamUrl = isP2P ? ep.vod_url : (ep.orginal_url || ep.vod_url);
+
+            if (!streamUrl) return null;
+
             return {
                 name: 'PPCine',
                 title: ep.title || `Episode ${index + 1}`,
-                url: ep.vod_url,
+                url: streamUrl,
                 quality: this.detectQuality(ep.title || ''),
                 episode: ep.collection || index + 1,
                 duration: ep.vod_duration ? parseInt(ep.vod_duration) : null,
-                behaviorHints: { notWebReady: false, bingeGroup: `ppcine-${video.id || video.vod_id}` }
+                isP2P: isP2P,  // Flag for iOS to know if proxy needed
+                behaviorHints: {
+                    notWebReady: isP2P,  // P2P streams are not web-ready
+                    bingeGroup: `ppcine-${video.id || video.vod_id}`
+                }
             };
         }).filter(s => s !== null);
     }
