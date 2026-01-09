@@ -7,6 +7,7 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const crypto = require('crypto');
+const zlib = require('zlib');
 
 
 const app = express();
@@ -45,16 +46,23 @@ class PPCineClient {
     }
 
     // Decrypt AES-encrypted API response (from ak/a.java)
-    // Updated to handle "SHOK" prefix from HAR file analysis
-    static decryptResponse(encryptedBase64) {
-        try {
-            // Remove "SHOK" prefix if present (from HAR file analysis)
-            if (encryptedBase64 && encryptedBase64.startsWith('SHOK')) {
-                encryptedBase64 = encryptedBase64.substring(4);
-            }
+    // After proper gzip decompression, the response should be pure Base64 AES-encrypted data
+    static decryptResponse(encryptedData) {
+        if (!encryptedData || typeof encryptedData !== 'string') {
+            console.error('PPCineClient: Invalid input to decryptResponse');
+            return null;
+        }
 
-            // Base64 decode
-            const encrypted = Buffer.from(encryptedBase64, 'base64');
+        // Clean up the data - remove whitespace and any stray characters
+        let data = encryptedData.replace(/[\s\r\n]+/g, '').trim();
+
+        // Log raw data for debugging
+        console.log(`PPCineClient: Decrypting data, length: ${data.length}, starts with: ${data.substring(0, 30)}`);
+
+        // Try direct Base64 decode first
+        try {
+            const encrypted = Buffer.from(data, 'base64');
+            console.log(`PPCineClient: Base64 decoded to ${encrypted.length} bytes`);
 
             // AES decrypt using CBC mode with PKCS5 padding
             const decipher = crypto.createDecipheriv('aes-128-cbc',
@@ -63,11 +71,35 @@ class PPCineClient {
             let decrypted = decipher.update(encrypted);
             decrypted = Buffer.concat([decrypted, decipher.final()]);
 
-            return decrypted.toString('utf8');
+            const result = decrypted.toString('utf8');
+            console.log(`PPCineClient: Decryption successful, result length: ${result.length}`);
+            return result;
         } catch (e) {
             console.error('PPCineClient: Decryption error:', e.message);
-            return null;
+
+            // Try with block alignment as fallback
+            try {
+                const encrypted = Buffer.from(data, 'base64');
+                const aligned = Math.floor(encrypted.length / 16) * 16;
+                console.log(`PPCineClient: Trying with aligned length: ${aligned}`);
+
+                const alignedData = encrypted.slice(0, aligned);
+                const decipher = crypto.createDecipheriv('aes-128-cbc',
+                    Buffer.from(PPCineClient.AES_KEY),
+                    Buffer.from(PPCineClient.AES_IV));
+                let decrypted = decipher.update(alignedData);
+                decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+                const result = decrypted.toString('utf8');
+                console.log(`PPCineClient: Aligned decryption successful`);
+                return result;
+            } catch (e2) {
+                console.error('PPCineClient: Aligned decryption also failed:', e2.message);
+            }
         }
+
+        console.error('PPCineClient: All decryption attempts failed');
+        return null;
     }
 
     // Generate Android-like device ID (16 char hex string - matches HAR file)
@@ -302,18 +334,39 @@ class PPCineClient {
                     'Accept-Encoding': 'gzip',
                     'Connection': 'Keep-Alive'
                 },
-                responseType: 'text', // Get raw text to handle both encrypted and plain responses
-                decompress: true // Automatically decompress gzip responses
+                responseType: 'arraybuffer', // Get raw bytes to properly handle gzip
+                decompress: false // We'll decompress manually
             });
 
-            // Response is AES encrypted and base64 encoded (with "SHOK" prefix)
+            // Response is gzipped - need to decompress
             let responseData = response.data;
+            let textData = '';
 
+            try {
+                // Check if response is gzipped (gzip magic number: 0x1f 0x8b)
+                const buffer = Buffer.from(responseData);
+                if (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+                    console.log('PPCineClient: Decompressing gzip response...');
+                    const decompressed = zlib.gunzipSync(buffer);
+                    textData = decompressed.toString('utf8');
+                    console.log(`PPCineClient: Decompressed ${buffer.length} bytes to ${decompressed.length} bytes`);
+                } else {
+                    // Not gzipped, just convert to string
+                    textData = buffer.toString('utf8');
+                }
+            } catch (decompressError) {
+                console.error('PPCineClient: Decompress error:', decompressError.message);
+                // Try treating as plain text
+                textData = Buffer.from(responseData).toString('utf8');
+            }
+
+            // Now textData should be the decrypted Base64 string
             // If response is a string (encrypted), try to decrypt
-            if (typeof responseData === 'string' && responseData.length > 0) {
-                // Check if it's encrypted (starts with "SHOK" or doesn't start with '{')
-                if (responseData.startsWith('SHOK') || !responseData.startsWith('{')) {
-                    const decrypted = PPCineClient.decryptResponse(responseData);
+            if (typeof textData === 'string' && textData.length > 0) {
+                // Response should be pure Base64 AES-encrypted data
+                // (Decompiled PPCine app shows ak.a.a() expects Base64 without prefix)
+                if (!textData.startsWith('{')) {
+                    const decrypted = PPCineClient.decryptResponse(textData);
                     if (decrypted) {
                         try {
                             responseData = JSON.parse(decrypted);
@@ -394,9 +447,9 @@ class PPCineClient {
         // Updated endpoint from HAR analysis: /api/channel/get_list
         const response = await this.request('api/channel/get_list', {});
         // Handle different response formats
-        const result = Array.isArray(response?.result) ? response.result : 
-                      (Array.isArray(response?.data) ? response.data : 
-                      (Array.isArray(response) ? response : []));
+        const result = Array.isArray(response?.result) ? response.result :
+            (Array.isArray(response?.data) ? response.data :
+                (Array.isArray(response) ? response : []));
         this.setCache('channels', result);
         return result;
     }
@@ -410,9 +463,9 @@ class PPCineClient {
             channel_id: channelId, pn: page, psize: 100
         });
         // Handle different response formats
-        const result = Array.isArray(response?.result) ? response.result : 
-                      (Array.isArray(response?.data) ? response.data :
-                      (Array.isArray(response) ? response : []));
+        const result = Array.isArray(response?.result) ? response.result :
+            (Array.isArray(response?.data) ? response.data :
+                (Array.isArray(response) ? response : []));
         this.setCache(cacheKey, result);
         return result;
     }
@@ -422,13 +475,13 @@ class PPCineClient {
         const cacheKey = `user_vod_${type}_${page}`;
         const cached = this.getCached(cacheKey);
         if (cached) return cached;
-        
+
         try {
             console.log(`PPCineClient: getUserVodList - type: ${type}, page: ${page}`);
             // Main endpoint discovered from HAR: /api/user_vod/get_list
             // type=1 for movies, type=2 for TV shows
             const response = await this.request('api/user_vod/get_list', { type: type });
-            
+
             // Handle different response formats
             let result = [];
             if (Array.isArray(response?.result)) {
@@ -440,7 +493,7 @@ class PPCineClient {
             } else if (response?.result?.list && Array.isArray(response.result.list)) {
                 result = response.result.list;
             }
-            
+
             console.log(`PPCineClient: getUserVodList returned ${result.length} items`);
             this.setCache(cacheKey, result);
             return result;
@@ -454,25 +507,50 @@ class PPCineClient {
         try {
             console.log(`PPCineClient: getRankingVideos - topicId: ${topicId}, page: ${page}`);
             // Updated: Use channel/get_info for topic-based videos
-            // If topicId is actually a channel_id, use channel endpoint
-            const response = await this.request('api/channel/get_info', { 
-                channel_id: topicId, 
-                pn: page, 
-                psize: 20 
+            const response = await this.request('api/channel/get_info', {
+                channel_id: topicId,
+                pn: page,
+                psize: 20
             });
+
             // Handle different response formats
-            let result = [];
+            let modules = [];
             if (response?.result?.list && Array.isArray(response.result.list)) {
-                result = response.result.list;
+                modules = response.result.list;
             } else if (Array.isArray(response?.result)) {
-                result = response.result;
+                modules = response.result;
             } else if (Array.isArray(response?.data)) {
-                result = response.data;
+                modules = response.data;
             } else if (Array.isArray(response)) {
-                result = response;
+                modules = response;
             }
-            console.log(`PPCineClient: getRankingVideos returned ${result.length} items`);
-            return result;
+
+            // Extract videos from block_list[].vod_info structure
+            // Each module has block_list array, each block has vod_info with video details
+            let videos = [];
+            for (const module of modules) {
+                if (module.block_list && Array.isArray(module.block_list)) {
+                    for (const block of module.block_list) {
+                        // Merge block-level data with vod_info
+                        if (block.vod_info && typeof block.vod_info === 'object') {
+                            videos.push({
+                                ...block.vod_info,
+                                id: block.data_id || block.vod_info.vod_id,
+                                banner_pic: block.banner_pic // Keep banner for poster fallback
+                            });
+                        } else if (block.data_id) {
+                            // Some blocks may just have data_id without vod_info
+                            videos.push({ id: block.data_id, ...block });
+                        }
+                    }
+                }
+            }
+
+            console.log(`PPCineClient: getRankingVideos returned ${videos.length} videos from ${modules.length} modules`);
+            if (videos.length > 0) {
+                console.log('PPCineClient: Sample video:', JSON.stringify(videos[0]).substring(0, 300));
+            }
+            return videos;
         } catch (error) {
             console.error('PPCineClient: getRankingVideos error:', error.message);
             console.error('PPCineClient: Error response:', error.response?.data || 'No response data');
@@ -849,7 +927,13 @@ app.get('/', (req, res) => res.redirect('/manifest.json'));
 // ============================================
 app.get('/catalog/:type/:id', async (req, res) => {
     try {
-        const { type, id } = req.params;
+        const { type } = req.params;
+        // Strip .json suffix from catalog ID (Stremio appends it)
+        let id = req.params.id;
+        if (id.endsWith('.json')) {
+            id = id.slice(0, -5);
+        }
+        console.log(`Catalog endpoint: type=${type}, id=${id}`);
         const extra = {
             genre: req.query.genre || null,
             skip: parseInt(req.query.skip) || 0,
@@ -879,29 +963,39 @@ app.get('/catalog/:type/:id', async (req, res) => {
 
         if (id === 'ppcine-trending') {
             const typeId = type === 'movie' ? 1 : 2;
+            console.log(`Catalog: Starting trending fetch for type ${typeId}, page ${page}`);
             // Try new getUserVodList endpoint first (discovered from HAR)
             try {
+                console.log('Catalog: Calling getUserVodList...');
                 const videos = await ppcine.getUserVodList(typeId, page);
+                console.log(`Catalog: getUserVodList returned ${videos ? videos.length : 'null'} items`);
                 if (videos && videos.length > 0) {
                     metas = videos.map(v => ppcine.transformToMeta(v, type));
                 } else {
                     // Fallback to topic-based method
+                    console.log('Catalog: Falling back to findTrendingTopic...');
                     const trendingTopic = await ppcine.findTrendingTopic(typeId);
+                    console.log(`Catalog: trendingTopic = ${JSON.stringify(trendingTopic)}`);
                     if (trendingTopic && trendingTopic.id) {
                         const topicVideos = await ppcine.getRankingVideos(trendingTopic.id, page);
                         if (topicVideos && topicVideos.length > 0) {
                             metas = topicVideos.map(v => ppcine.transformToMeta(v, type));
                         } else {
+                            console.log('Catalog: Falling back to filterVideos...');
                             const filterVideos = await ppcine.filterVideos(typeId, { page });
+                            console.log(`Catalog: filterVideos returned ${filterVideos ? filterVideos.length : 'null'} items`);
                             metas = filterVideos.map(v => ppcine.transformToMeta(v, type));
                         }
                     } else {
+                        console.log('Catalog: No trending topic, using filterVideos directly...');
                         const filterVideos = await ppcine.filterVideos(typeId, { page });
+                        console.log(`Catalog: filterVideos returned ${filterVideos ? filterVideos.length : 'null'} items`);
                         metas = filterVideos.map(v => ppcine.transformToMeta(v, type));
                     }
                 }
             } catch (error) {
                 console.error('Trending getUserVodList error, using fallback:', error.message);
+                console.error('Error stack:', error.stack);
                 // Fallback to filter method
                 const videos = await ppcine.filterVideos(typeId, { page });
                 metas = videos.map(v => ppcine.transformToMeta(v, type));
