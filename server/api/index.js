@@ -70,11 +70,11 @@ class PPCineClient {
         }
     }
 
-    // Generate a more Android-like device ID (32 char hex string)
+    // Generate Android-like device ID (16 char hex string - matches HAR file)
     static generateDeviceId() {
         const chars = '0123456789abcdef';
         let deviceId = '';
-        for (let i = 0; i < 32; i++) {
+        for (let i = 0; i < 16; i++) {
             deviceId += chars.charAt(Math.floor(Math.random() * chars.length));
         }
         return deviceId;
@@ -101,7 +101,9 @@ class PPCineClient {
             timeout: 30000,
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'okhttp/4.9.0'
+                'User-Agent': 'okhttp/4.10.0', // Updated to match HAR file
+                'Accept-Encoding': 'gzip', // Match HAR file
+                'Connection': 'Keep-Alive' // Match HAR file
             },
             // Allow self-signed certificates (some backends use them)
             validateStatus: function (status) {
@@ -116,37 +118,47 @@ class PPCineClient {
         return PPCineClient.generateDeviceId();
     }
 
-    // Get authentication HEADERS for API requests (Android app sends these as headers, not body params!)
+    // Get authentication HEADERS for API requests (exact match from HAR file)
     getAuthHeaders() {
         const curTime = Date.now().toString();
         const sign = PPCineClient.generateSign(this.deviceId, curTime);
 
-        // Generate a fake GAID (Google Advertising ID)
+        // Generate a fake GAID (Google Advertising ID) - UUID format
         const gaid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
             const r = Math.random() * 16 | 0;
             return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
         });
 
+        // Get timezone offset (e.g., GMT+05:30)
+        const timezoneOffset = -new Date().getTimezoneOffset();
+        const hours = Math.floor(Math.abs(timezoneOffset) / 60);
+        const minutes = Math.abs(timezoneOffset) % 60;
+        const signStr = timezoneOffset >= 0 ? '+' : '-';
+        const timezoneStr = `GMT${signStr}${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+
         return {
+            'log-header': 'I am the log request header.', // Critical header from HAR file!
+            'androidid': this.deviceId, // 16 chars, same as device_id
             'app_id': PPCineClient.APP_ID,
-            'package_name': 'com.movieph.bj.playvibes',
-            'version': PPCineClient.VERSION,
-            'sys_platform': PPCineClient.SYS_PLATFORM,
-            'mob_mfr': 'samsung',
-            'mobmodel': 'SM-G998U',
-            'sysrelease': '13',
-            'device_id': this.deviceId,
-            'gaid': gaid,
-            'channel_code': PPCineClient.CHANNEL_CODE,
-            'androidid': this.deviceId.substring(0, 16), // Use first 16 chars of device_id
-            'cur_time': curTime,
-            'token': this.token || '',
-            'sign': sign,
-            'is_vvv': '0',
-            'is_language': 'en',
-            'is_display': '',
             'app_language': 'en',
-            'en_al': '0'
+            'channel_code': PPCineClient.CHANNEL_CODE,
+            'cur_time': curTime,
+            'device_id': this.deviceId,
+            'en_al': '0',
+            'gaid': gaid,
+            'is_display': timezoneStr, // Timezone string, not empty!
+            'is_language': 'en',
+            'is_vvv': '1', // Changed from '0' to '1' based on HAR file
+            'mob_mfr': 'oneplus', // Match HAR file
+            'mobmodel': 'DN2101', // Match HAR file
+            'package_name': 'com.movieph.bj.playvibes',
+            'sign': sign,
+            'sys_platform': PPCineClient.SYS_PLATFORM,
+            'sysrelease': '13',
+            'token': this.token || '',
+            'version': PPCineClient.VERSION,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'okhttp/4.10.0' // Updated to match HAR file
         };
     }
 
@@ -170,9 +182,10 @@ class PPCineClient {
                 this.baseURL = baseUrl;
                 this.client.defaults.baseURL = baseUrl;
 
+                // Body matches HAR file: invited_by=&is_install=0
                 const response = await this.request('api/public/init', {
-                    device_id: this.deviceId,
-                    is_install: '1'
+                    invited_by: '',
+                    is_install: '0'
                 }, true);
 
                 console.log('PPCineClient: Init response received:', JSON.stringify(response).substring(0, 500));
@@ -265,9 +278,9 @@ class PPCineClient {
         // Get authentication HEADERS (Android app sends these as headers, not body params!)
         const authHeaders = this.getAuthHeaders();
 
-        // Body params - include device_id as the Android app does for some endpoints
-        const bodyParams = { device_id: this.deviceId, ...params };
-        if (this.token) bodyParams.token = this.token;
+        // Body params - device_id and token are in HEADERS, not body (from HAR file analysis)
+        const bodyParams = { ...params };
+        // Note: device_id and token are sent as headers, not in body
 
         const formData = new URLSearchParams();
         for (const [key, value] of Object.entries(bodyParams)) {
@@ -283,10 +296,14 @@ class PPCineClient {
             const response = await this.client.post(endpoint, formData.toString(), {
                 headers: {
                     ...authHeaders,
+                    // Content-Type and User-Agent already in authHeaders, but ensure they're set
                     'Content-Type': 'application/x-www-form-urlencoded',
-                    'User-Agent': 'okhttp/4.9.0'
+                    'User-Agent': 'okhttp/4.10.0',
+                    'Accept-Encoding': 'gzip',
+                    'Connection': 'Keep-Alive'
                 },
-                responseType: 'text' // Get raw text to handle both encrypted and plain responses
+                responseType: 'text', // Get raw text to handle both encrypted and plain responses
+                decompress: true // Automatically decompress gzip responses
             });
 
             // Response is AES encrypted and base64 encoded (with "SHOK" prefix)
@@ -606,25 +623,27 @@ class PPCineClient {
         if (cached) return cached;
 
         // Updated sign generation based on HAR file analysis
-        // From HAR: sign=6A3A907A3145488A08A801FE2799AFAE&vod_id=375409&cur_time=1767945759955&audio_type=0
-        // Sign is MD5 hash of: vod_id + cur_time + audio_type + secret_key
+        // From HAR: sign=E6666203D93C6FC0460A88CD37291928&vod_id=375409&cur_time=1767955181998&audio_type=0
+        // Sign in BODY is MD5 hash of: vod_id + cur_time + audio_type + secret_key
+        // Note: Header also has a sign, but body sign is different!
         const curTime = Date.now().toString(); // Milliseconds timestamp
         const audioType = 0;
-        // Generate sign: MD5(vod_id + cur_time + audio_type + secret_key).toUpperCase()
+        // Generate body sign: MD5(vod_id + cur_time + audio_type + secret_key).toUpperCase()
         const signString = `${vodId}${curTime}${audioType}${PPCineClient.SECRET_KEY}`;
-        const requestSign = PPCineClient.md5(signString).toUpperCase();
+        const bodySign = PPCineClient.md5(signString).toUpperCase();
 
         const params = {
             vod_id: vodId,
             audio_type: audioType,
             cur_time: curTime,
-            sign: requestSign
+            sign: bodySign // Sign in body (different from header sign)
         };
         if (sourceId) params.source_id = sourceId;
 
-        console.log(`PPCineClient: getVideoDetails - vod_id: ${vodId}, cur_time: ${curTime}, sign: ${requestSign.substring(0, 8)}...`);
+        console.log(`PPCineClient: getVideoDetails - vod_id: ${vodId}, cur_time: ${curTime}, body_sign: ${bodySign.substring(0, 8)}...`);
 
         // Use info_new endpoint (discovered from HAR file analysis)
+        // Note: Headers will have their own sign generated by getAuthHeaders()
         const response = await this.request('api/vod/info_new', params);
 
         // Handle different response formats
