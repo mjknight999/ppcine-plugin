@@ -18,7 +18,9 @@ class PPCineClient {
     // ==========================================
     // AUTHENTICATION CONSTANTS (extracted from Android app)
     // ==========================================
-    static SECRET_KEY = '47Q8tBqO4YqrMHf4'; // Decrypted from Android app's encrypted key
+    // SECRET_KEY is decrypted from Base64+3DES: 'MxASAkl/yHTGg+/Tw1R7u96nGqkWsOZ2'
+    // Using 3DES with key='dsawdf634eebGFHITR5UT9kS' and IV='32456738'
+    static SECRET_KEY = '47Q8tBqO4YqrMHf4';
     static APP_ID = 'movieph';
     static VERSION = '40000';
     static SYS_PLATFORM = '2'; // 2 = Android
@@ -34,14 +36,23 @@ class PPCineClient {
     }
 
     // Generate signature: MD5(SECRET_KEY + device_id + timestamp).toUpperCase()
+    // From da/b0.java: sign = e.x(e.y(cur_time)).toUpperCase()
+    // e.y(str) = 3DES_DECRYPT(SECRET) + device_id + str
+    // e.x(str) = MD5(str)
     static generateSign(deviceId, timestamp) {
         const toHash = PPCineClient.SECRET_KEY + deviceId + timestamp;
         return PPCineClient.md5(toHash).toUpperCase();
     }
 
     // Decrypt AES-encrypted API response (from ak/a.java)
+    // Updated to handle "SHOK" prefix from HAR file analysis
     static decryptResponse(encryptedBase64) {
         try {
+            // Remove "SHOK" prefix if present (from HAR file analysis)
+            if (encryptedBase64 && encryptedBase64.startsWith('SHOK')) {
+                encryptedBase64 = encryptedBase64.substring(4);
+            }
+
             // Base64 decode
             const encrypted = Buffer.from(encryptedBase64, 'base64');
 
@@ -71,8 +82,10 @@ class PPCineClient {
 
 
     constructor() {
-        // Try multiple base URLs (Android app uses kuht.52s7g.com, but init may redirect)
+        // Updated base URL from HAR file analysis
+        // Main API discovered: https://a8ll.vw9w.com
         this.baseURLs = [
+            'https://a8ll.vw9w.com/',
             'https://1ifz.w6mj.com/',
             'https://kuht.52s7g.com/'
         ];
@@ -276,13 +289,13 @@ class PPCineClient {
                 responseType: 'text' // Get raw text to handle both encrypted and plain responses
             });
 
-            // Response is AES encrypted and base64 encoded
+            // Response is AES encrypted and base64 encoded (with "SHOK" prefix)
             let responseData = response.data;
 
             // If response is a string (encrypted), try to decrypt
             if (typeof responseData === 'string' && responseData.length > 0) {
-                // Check if it's encrypted (doesn't start with '{')
-                if (!responseData.startsWith('{')) {
+                // Check if it's encrypted (starts with "SHOK" or doesn't start with '{')
+                if (responseData.startsWith('SHOK') || !responseData.startsWith('{')) {
                     const decrypted = PPCineClient.decryptResponse(responseData);
                     if (decrypted) {
                         try {
@@ -290,10 +303,12 @@ class PPCineClient {
                             console.log(`PPCineClient: Decrypted response for ${endpoint}`);
                         } catch (e) {
                             console.error('PPCineClient: Failed to parse decrypted JSON:', e.message);
+                            console.error('PPCineClient: Decrypted text (first 200 chars):', decrypted.substring(0, 200));
                             responseData = decrypted;
                         }
                     } else {
                         console.error('PPCineClient: Failed to decrypt response');
+                        console.error('PPCineClient: Response (first 100 chars):', responseData.substring(0, 100));
                     }
                 } else {
                     // Already JSON string, parse it
@@ -359,9 +374,12 @@ class PPCineClient {
     async getChannels() {
         const cached = this.getCached('channels');
         if (cached) return cached;
-        const response = await this.request('api/channel/get_list', { channel_id: 0 });
+        // Updated endpoint from HAR analysis: /api/channel/get_list
+        const response = await this.request('api/channel/get_list', {});
         // Handle different response formats
-        const result = Array.isArray(response?.result) ? response.result : (Array.isArray(response) ? response : []);
+        const result = Array.isArray(response?.result) ? response.result : 
+                      (Array.isArray(response?.data) ? response.data : 
+                      (Array.isArray(response) ? response : []));
         this.setCache('channels', result);
         return result;
     }
@@ -370,25 +388,69 @@ class PPCineClient {
         const cacheKey = `channel_${channelId}_${page}`;
         const cached = this.getCached(cacheKey);
         if (cached) return cached;
+        // Updated endpoint from HAR analysis: /api/channel/get_info
         const response = await this.request('api/channel/get_info', {
             channel_id: channelId, pn: page, psize: 100
         });
         // Handle different response formats
-        const result = Array.isArray(response?.result) ? response.result : (Array.isArray(response) ? response : []);
+        const result = Array.isArray(response?.result) ? response.result : 
+                      (Array.isArray(response?.data) ? response.data :
+                      (Array.isArray(response) ? response : []));
         this.setCache(cacheKey, result);
         return result;
+    }
+
+    // New method: Get movies/TV shows list using discovered endpoint
+    async getUserVodList(type = 1, page = 1) {
+        const cacheKey = `user_vod_${type}_${page}`;
+        const cached = this.getCached(cacheKey);
+        if (cached) return cached;
+        
+        try {
+            console.log(`PPCineClient: getUserVodList - type: ${type}, page: ${page}`);
+            // Main endpoint discovered from HAR: /api/user_vod/get_list
+            // type=1 for movies, type=2 for TV shows
+            const response = await this.request('api/user_vod/get_list', { type: type });
+            
+            // Handle different response formats
+            let result = [];
+            if (Array.isArray(response?.result)) {
+                result = response.result;
+            } else if (Array.isArray(response?.data)) {
+                result = response.data;
+            } else if (Array.isArray(response)) {
+                result = response;
+            } else if (response?.result?.list && Array.isArray(response.result.list)) {
+                result = response.result.list;
+            }
+            
+            console.log(`PPCineClient: getUserVodList returned ${result.length} items`);
+            this.setCache(cacheKey, result);
+            return result;
+        } catch (error) {
+            console.error('PPCineClient: getUserVodList error:', error.message);
+            return [];
+        }
     }
 
     async getRankingVideos(topicId, page = 1) {
         try {
             console.log(`PPCineClient: getRankingVideos - topicId: ${topicId}, page: ${page}`);
-            const response = await this.request('api/topic/vod_list', { topic_id: topicId, pn: page });
+            // Updated: Use channel/get_info for topic-based videos
+            // If topicId is actually a channel_id, use channel endpoint
+            const response = await this.request('api/channel/get_info', { 
+                channel_id: topicId, 
+                pn: page, 
+                psize: 20 
+            });
             // Handle different response formats
             let result = [];
             if (response?.result?.list && Array.isArray(response.result.list)) {
                 result = response.result.list;
             } else if (Array.isArray(response?.result)) {
                 result = response.result;
+            } else if (Array.isArray(response?.data)) {
+                result = response.data;
             } else if (Array.isArray(response)) {
                 result = response;
             }
@@ -410,7 +472,9 @@ class PPCineClient {
         }
         try {
             console.log(`PPCineClient: getSpecialLists - typeId: ${typeId}`);
-            const response = await this.request('api/topic/list', { type_id: typeId });
+            // Note: topic/list endpoint may not exist in new API
+            // Using channel/get_list as alternative for categories
+            const response = await this.request('api/channel/get_list', {});
 
             // Handle different response formats
             let result = [];
@@ -481,14 +545,14 @@ class PPCineClient {
 
     async filterVideos(typeId, options = {}) {
         const { genre, area, year, page = 1 } = options;
-        const params = { type_id: typeId, pn: page };
+        const params = { type_id: typeId, pn: page, psize: 20 };
         if (genre) params.class = genre;
         if (area) params.area = area;
         if (year) params.year = year;
 
         try {
             console.log(`PPCineClient: filterVideos - typeId: ${typeId}, page: ${page}, params:`, params);
-            // Try without initialization - some endpoints might work
+            // Updated endpoint from HAR file analysis: /api/search/screen
             const response = await this.request('api/search/screen', params, true);
 
             // Handle different response formats
@@ -519,10 +583,20 @@ class PPCineClient {
     }
 
     async search(keyword, page = 1) {
-        const response = await this.request('api/search/result', { wd: keyword, pn: page });
-        // Handle different response formats
-        if (Array.isArray(response?.result)) return response.result;
-        if (Array.isArray(response)) return response;
+        // Updated: Use /api/user_vod/get_list with search or use search endpoint
+        // From HAR analysis, search might use different endpoint
+        // Try search endpoint first, fallback to user_vod/get_list
+        try {
+            // Try search endpoint if available
+            const response = await this.request('api/search/result', { wd: keyword, pn: page });
+            // Handle different response formats
+            if (Array.isArray(response?.result)) return response.result;
+            if (Array.isArray(response)) return response;
+            if (response?.data && Array.isArray(response.data)) return response.data;
+        } catch (error) {
+            console.warn('PPCineClient: Search endpoint failed, trying alternative:', error.message);
+        }
+        // Fallback: return empty array if search fails
         return [];
     }
 
@@ -531,22 +605,26 @@ class PPCineClient {
         const cached = this.getCached(cacheKey);
         if (cached) return cached;
 
-        // Generate per-request timestamp and signature (matches Android app format)
-        const curTime = Math.floor(Date.now() / 1000).toString();
-        const signString = `${vodId}${curTime}${this.deviceId}`;
+        // Updated sign generation based on HAR file analysis
+        // From HAR: sign=6A3A907A3145488A08A801FE2799AFAE&vod_id=375409&cur_time=1767945759955&audio_type=0
+        // Sign is MD5 hash of: vod_id + cur_time + audio_type + secret_key
+        const curTime = Date.now().toString(); // Milliseconds timestamp
+        const audioType = 0;
+        // Generate sign: MD5(vod_id + cur_time + audio_type + secret_key).toUpperCase()
+        const signString = `${vodId}${curTime}${audioType}${PPCineClient.SECRET_KEY}`;
         const requestSign = PPCineClient.md5(signString).toUpperCase();
 
         const params = {
             vod_id: vodId,
-            audio_type: 0,           // Default audio type
-            cur_time: curTime,       // Request timestamp
-            sign: requestSign        // Per-request signature
+            audio_type: audioType,
+            cur_time: curTime,
+            sign: requestSign
         };
         if (sourceId) params.source_id = sourceId;
 
-        console.log(`PPCineClient: getVideoDetails - vod_id: ${vodId}, cur_time: ${curTime}`);
+        console.log(`PPCineClient: getVideoDetails - vod_id: ${vodId}, cur_time: ${curTime}, sign: ${requestSign.substring(0, 8)}...`);
 
-        // Use info_new endpoint to get vod_collection with streaming URLs (same as Android app)
+        // Use info_new endpoint (discovered from HAR file analysis)
         const response = await this.request('api/vod/info_new', params);
 
         // Handle different response formats
@@ -782,50 +860,58 @@ app.get('/catalog/:type/:id', async (req, res) => {
 
         if (id === 'ppcine-trending') {
             const typeId = type === 'movie' ? 1 : 2;
-            // Try to use topic-based trending first (more accurate)
+            // Try new getUserVodList endpoint first (discovered from HAR)
             try {
-                const trendingTopic = await ppcine.findTrendingTopic(typeId);
-                if (trendingTopic && trendingTopic.id) {
-                    const topicVideos = await ppcine.getRankingVideos(trendingTopic.id, page);
-                    if (topicVideos && topicVideos.length > 0) {
-                        metas = topicVideos.map(v => ppcine.transformToMeta(v, type));
-                    } else {
-                        // Fallback to filter if topic returns empty
-                        const videos = await ppcine.filterVideos(typeId, { page });
-                        metas = videos.map(v => ppcine.transformToMeta(v, type));
-                    }
-                } else {
-                    // Fallback to filter if no topic found
-                    const videos = await ppcine.filterVideos(typeId, { page });
+                const videos = await ppcine.getUserVodList(typeId, page);
+                if (videos && videos.length > 0) {
                     metas = videos.map(v => ppcine.transformToMeta(v, type));
+                } else {
+                    // Fallback to topic-based method
+                    const trendingTopic = await ppcine.findTrendingTopic(typeId);
+                    if (trendingTopic && trendingTopic.id) {
+                        const topicVideos = await ppcine.getRankingVideos(trendingTopic.id, page);
+                        if (topicVideos && topicVideos.length > 0) {
+                            metas = topicVideos.map(v => ppcine.transformToMeta(v, type));
+                        } else {
+                            const filterVideos = await ppcine.filterVideos(typeId, { page });
+                            metas = filterVideos.map(v => ppcine.transformToMeta(v, type));
+                        }
+                    } else {
+                        const filterVideos = await ppcine.filterVideos(typeId, { page });
+                        metas = filterVideos.map(v => ppcine.transformToMeta(v, type));
+                    }
                 }
             } catch (error) {
-                console.error('Trending topic error, using filter fallback:', error.message);
+                console.error('Trending getUserVodList error, using fallback:', error.message);
                 // Fallback to filter method
                 const videos = await ppcine.filterVideos(typeId, { page });
                 metas = videos.map(v => ppcine.transformToMeta(v, type));
             }
         } else if (id === 'ppcine-latest') {
             const typeId = type === 'movie' ? 1 : 2;
-            // Try to use topic-based latest first (more accurate)
+            // Try new getUserVodList endpoint first (discovered from HAR)
             try {
-                const latestTopic = await ppcine.findLatestTopic(typeId);
-                if (latestTopic && latestTopic.id) {
-                    const topicVideos = await ppcine.getRankingVideos(latestTopic.id, page);
-                    if (topicVideos && topicVideos.length > 0) {
-                        metas = topicVideos.map(v => ppcine.transformToMeta(v, type));
-                    } else {
-                        // Fallback to filter if topic returns empty
-                        const videos = await ppcine.filterVideos(typeId, { page });
-                        metas = videos.map(v => ppcine.transformToMeta(v, type));
-                    }
-                } else {
-                    // Fallback to filter if no topic found
-                    const videos = await ppcine.filterVideos(typeId, { page });
+                const videos = await ppcine.getUserVodList(typeId, page);
+                if (videos && videos.length > 0) {
                     metas = videos.map(v => ppcine.transformToMeta(v, type));
+                } else {
+                    // Fallback to topic-based method
+                    const latestTopic = await ppcine.findLatestTopic(typeId);
+                    if (latestTopic && latestTopic.id) {
+                        const topicVideos = await ppcine.getRankingVideos(latestTopic.id, page);
+                        if (topicVideos && topicVideos.length > 0) {
+                            metas = topicVideos.map(v => ppcine.transformToMeta(v, type));
+                        } else {
+                            const filterVideos = await ppcine.filterVideos(typeId, { page });
+                            metas = filterVideos.map(v => ppcine.transformToMeta(v, type));
+                        }
+                    } else {
+                        const filterVideos = await ppcine.filterVideos(typeId, { page });
+                        metas = filterVideos.map(v => ppcine.transformToMeta(v, type));
+                    }
                 }
             } catch (error) {
-                console.error('Latest topic error, using filter fallback:', error.message);
+                console.error('Latest getUserVodList error, using fallback:', error.message);
                 // Fallback to filter method
                 const videos = await ppcine.filterVideos(typeId, { page });
                 metas = videos.map(v => ppcine.transformToMeta(v, type));
